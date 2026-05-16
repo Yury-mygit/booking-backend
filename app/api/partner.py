@@ -556,3 +556,96 @@ async def list_incoming_bookings(
         )
         for b, r, h, u in rows
     ]
+
+
+async def _get_my_booking(
+    db: AsyncSession, ctx: AuthContext, code: str
+) -> tuple[Booking, Room, Hotel, User]:
+    row = (
+        await db.execute(
+            select(Booking, Room, Hotel, User)
+            .join(Room, Room.id == Booking.room_id)
+            .join(Hotel, Hotel.id == Room.hotel_id)
+            .join(User, User.id == Booking.user_id)
+            .where(Booking.code == code, Hotel.owner_user_id == ctx.user.id)
+            .with_for_update(of=Booking)
+        )
+    ).first()
+    if row is None:
+        raise APIError(404, "not_found", "Booking not found")
+    return row
+
+
+def _to_partner_booking(b: Booking, r: Room, h: Hotel, u: User) -> PartnerBookingView:
+    return PartnerBookingView(
+        id=b.id,
+        code=b.code,
+        room_id=r.id,
+        room_name_ru=r.name_ru,
+        hotel_id=h.id,
+        hotel_name_ru=h.name_ru,
+        client_first_name=u.first_name,
+        check_in=b.check_in,
+        check_out=b.check_out,
+        guests=b.guests,
+        total_kgs=b.total_kgs,
+        status=b.status,
+        created_at=b.created_at,
+    )
+
+
+@router.post("/bookings/{code}/confirm", response_model=PartnerBookingView)
+async def confirm_booking(
+    code: str,
+    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    db: AsyncSession = Depends(get_db),
+):
+    b, r, h, u = await _get_my_booking(db, ctx, code)
+    if b.status != BookingStatus.pending:
+        raise APIError(409, "conflict", f"Booking is {b.status.value}, only pending can be confirmed")
+    b.status = BookingStatus.paid
+    await db.commit()
+    await db.refresh(b)
+    return _to_partner_booking(b, r, h, u)
+
+
+@router.post("/bookings/{code}/cancel", response_model=PartnerBookingView)
+async def cancel_booking(
+    code: str,
+    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    db: AsyncSession = Depends(get_db),
+):
+    b, r, h, u = await _get_my_booking(db, ctx, code)
+    if b.status in (BookingStatus.cancelled, BookingStatus.refunded):
+        raise APIError(409, "conflict", f"Booking is already {b.status.value}")
+
+    avail_rows = (
+        (
+            await db.execute(
+                select(Availability)
+                .where(
+                    Availability.room_id == b.room_id,
+                    Availability.date >= b.check_in,
+                    Availability.date < b.check_out,
+                    Availability.status == AvailabilityStatus.booked,
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for a in avail_rows:
+        if a.price_override is None:
+            await db.execute(
+                delete(Availability).where(
+                    Availability.room_id == a.room_id, Availability.date == a.date
+                )
+            )
+        else:
+            a.status = AvailabilityStatus.free
+
+    b.status = BookingStatus.cancelled
+    await db.commit()
+    await db.refresh(b)
+    return _to_partner_booking(b, r, h, u)

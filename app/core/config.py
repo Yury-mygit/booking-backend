@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     tg_init_data_max_age_sec: int = 3600
     session_ttl_sec: int = 60 * 60 * 24 * 30
 
+    tg_webhook_secret: str = ""
+    public_base_client: str = "https://book.dev.raftforge.art/"
+    public_base_partner: str = "https://book-partner.dev.raftforge.art/"
+    public_base_admin: str = "https://book-admin.dev.raftforge.art/"
+
     dev_mode: bool = False
 
 

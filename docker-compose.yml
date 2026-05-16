@@ -15,6 +15,7 @@ services:
       - TG_BOT_TOKEN_CLIENT=${TG_BOT_TOKEN_CLIENT}
       - TG_BOT_TOKEN_PARTNER=${TG_BOT_TOKEN_PARTNER}
       - TG_BOT_TOKEN_ADMIN=${TG_BOT_TOKEN_ADMIN}
+      - TG_WEBHOOK_SECRET=${TG_WEBHOOK_SECRET:-}
       - DEV_MODE=${DEV_MODE:-false}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/info"]

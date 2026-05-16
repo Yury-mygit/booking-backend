@@ -196,6 +196,46 @@ async def set_hotel_status(
 
 # ─── Bookings ──────────────────────────────────────────────────────────────
 
+@router.get("/bookings", response_model=list[AdminBookingView])
+async def list_all_bookings(
+    status_filter: BookingStatus | None = Query(default=None, alias="status"),
+    hotel_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Booking, Room, Hotel, User)
+        .join(Room, Room.id == Booking.room_id)
+        .join(Hotel, Hotel.id == Room.hotel_id)
+        .join(User, User.id == Booking.user_id)
+        .order_by(Booking.created_at.desc())
+        .limit(500)
+    )
+    if status_filter is not None:
+        stmt = stmt.where(Booking.status == status_filter)
+    if hotel_id is not None:
+        stmt = stmt.where(Hotel.id == hotel_id)
+    rows = (await db.execute(stmt)).all()
+    return [
+        AdminBookingView(
+            id=b.id,
+            code=b.code,
+            user_id=b.user_id,
+            user_first_name=u.first_name,
+            room_id=b.room_id,
+            hotel_id=h.id,
+            hotel_name_ru=h.name_ru,
+            check_in=b.check_in,
+            check_out=b.check_out,
+            guests=b.guests,
+            total_kgs=b.total_kgs,
+            status=b.status,
+            created_at=b.created_at,
+        )
+        for b, r, h, u in rows
+    ]
+
+
 @router.post("/bookings/{code}/cancel", response_model=AdminBookingView)
 async def cancel_booking(
     code: str,

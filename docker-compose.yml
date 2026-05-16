@@ -17,6 +17,8 @@ services:
       - TG_BOT_TOKEN_ADMIN=${TG_BOT_TOKEN_ADMIN}
       - TG_WEBHOOK_SECRET=${TG_WEBHOOK_SECRET:-}
       - DEV_MODE=${DEV_MODE:-false}
+    volumes:
+      - booking_storage:/app/storage
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/info"]
       interval: 15s
@@ -24,6 +26,9 @@ services:
       retries: 3
     networks:
       - shared
+
+volumes:
+  booking_storage:
 
 networks:
   shared:

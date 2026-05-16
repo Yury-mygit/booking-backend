@@ -24,5 +24,8 @@ class Settings(BaseSettings):
 
     dev_mode: bool = False
 
+    storage_path: str = "/app/storage"
+    photo_max_bytes: int = 5 * 1024 * 1024
+
 
 settings = Settings()

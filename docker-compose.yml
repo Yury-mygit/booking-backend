@@ -1,0 +1,28 @@
+name: booking_dev
+
+services:
+  app:
+    build: .
+    container_name: booking_dev_app
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8026:8000"
+    environment:
+      - SERVICE_NAME=${SERVICE_NAME}
+      - VERSION=${VERSION:-0.1.0}
+      - DATABASE_URL=${DATABASE_URL}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TG_BOT_TOKEN_CLIENT=${TG_BOT_TOKEN_CLIENT}
+      - TG_BOT_TOKEN_PARTNER=${TG_BOT_TOKEN_PARTNER}
+      - TG_BOT_TOKEN_ADMIN=${TG_BOT_TOKEN_ADMIN}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/info"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - shared
+
+networks:
+  shared:
+    external: true

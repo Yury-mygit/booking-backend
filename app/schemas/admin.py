@@ -10,9 +10,15 @@ class AdminUserView(BaseModel):
     telegram_id: int
     role: UserRole
     first_name: str | None
+    last_name: str | None
+    username: str | None
     phone: str | None
+    email: str | None
     created_at: datetime
     is_verified_partner: bool
+    is_pending_partner: bool       # has partner_profile + verified_at IS NULL
+    hotels_count: int
+    bookings_count: int            # bookings made as a client (via clients.user_id)
 
 
 class AdminHotelView(BaseModel):
@@ -33,8 +39,8 @@ class HotelStatusUpdate(BaseModel):
 class AdminBookingView(BaseModel):
     id: int
     code: str
-    user_id: int
-    user_first_name: str | None
+    client_id: int
+    client_first_name: str | None
     room_id: int
     hotel_id: int
     hotel_name_ru: str

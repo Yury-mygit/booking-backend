@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
-from app.models.models import AvailabilityStatus, BookingStatus, HotelStatus
+from app.models.models import AvailabilityStatus, BookingStatus, DocKind, HotelStatus
 
 
 class HotelCreate(BaseModel):
@@ -152,3 +152,59 @@ class PartnerBookingView(BaseModel):
     total_kgs: int
     status: BookingStatus
     created_at: datetime
+
+
+class WalkinBookingCreate(BaseModel):
+    room_id: int
+    check_in: date
+    check_out: date
+    guests: int = Field(default=1, ge=1, le=20)
+    first_name: str = Field(min_length=1, max_length=128)
+    last_name: str | None = Field(default=None, max_length=128)
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=256)
+    doc_kind: DocKind | None = None
+    doc_number: str | None = Field(default=None, max_length=64)
+
+
+class ClientPartnerView(BaseModel):
+    id: int
+    user_id: int | None
+    first_name: str
+    last_name: str | None
+    phone: str | None
+    email: str | None
+    doc_kind: DocKind | None
+    doc_number: str | None
+    photo_url: str | None
+    bookings_count: int
+    last_booking_date: date | None
+    created_at: datetime
+
+
+class ClientUpdate(BaseModel):
+    first_name: str | None = Field(default=None, min_length=1, max_length=128)
+    last_name: str | None = Field(default=None, max_length=128)
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=256)
+    doc_kind: DocKind | None = None
+    doc_number: str | None = Field(default=None, max_length=64)
+
+
+class ClientLookup(BaseModel):
+    """Lookup by phone or email (digits-only / lowercase normalization on server)."""
+    phone: str | None = None
+    email: str | None = None
+
+
+class RoomFlatView(BaseModel):
+    room_id: int
+    room_name_ru: str
+    hotel_id: int
+    hotel_name_ru: str
+    capacity: int
+    beds: int | None
+    floor: int | None
+    price_kgs: int
+    today_status: AvailabilityStatus  # free / blocked / booked
+    photo: str | None  # first photo of the room (or None)

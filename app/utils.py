@@ -6,6 +6,37 @@ from typing import Iterator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+
+def normalize_phone(phone: str | None) -> str | None:
+    """Phone → digits-only (or None for empty input). Used for dedup."""
+    if phone is None:
+        return None
+    digits = re.sub(r"\D+", "", phone)
+    return digits or None
+
+
+def normalize_email(email: str | None) -> str | None:
+    """Email → lowercase + strip."""
+    if email is None:
+        return None
+    e = email.strip().lower()
+    return e or None
+
+
+async def get_or_create_client_for_user(db: AsyncSession, user):
+    """Return the Client row attached to a TG user, creating it on first call."""
+    from app.models.models import Client  # lazy import to avoid circular
+
+    existing = (
+        await db.execute(select(Client).where(Client.user_id == user.id))
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    c = Client(user_id=user.id, first_name=user.first_name or "Client")
+    db.add(c)
+    await db.flush()
+    return c
+
 BOOKING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 BOOKING_CODE_LEN = 8
 

@@ -65,6 +65,13 @@ class PaymentStatus(str, enum.Enum):
     refunded = "refunded"
 
 
+class DocKind(str, enum.Enum):
+    passport = "passport"
+    id_card = "id_card"
+    driving_license = "driving_license"
+    other = "other"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -77,7 +84,10 @@ class User(Base):
         ENUM(Lang, name="lang"), nullable=False, server_default=Lang.ru.value
     )
     first_name: Mapped[str | None] = mapped_column(String(128))
+    last_name: Mapped[str | None] = mapped_column(String(128))
+    username: Mapped[str | None] = mapped_column(String(64), index=True)
     phone: Mapped[str | None] = mapped_column(String(32))
+    email: Mapped[str | None] = mapped_column(String(256))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -92,6 +102,31 @@ class PartnerProfile(Base):
     company_name: Mapped[str] = mapped_column(String(256), nullable=False)
     legal_inn: Mapped[str | None] = mapped_column(String(32))
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Client(Base):
+    __tablename__ = "clients"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), unique=True, index=True
+    )
+    first_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    last_name: Mapped[str | None] = mapped_column(String(128))
+    phone: Mapped[str | None] = mapped_column(String(32), index=True)
+    email: Mapped[str | None] = mapped_column(String(256), index=True)
+    doc_kind: Mapped[DocKind | None] = mapped_column(ENUM(DocKind, name="doc_kind"))
+    doc_number: Mapped[str | None] = mapped_column(String(64))
+    photo_url: Mapped[str | None] = mapped_column(String(512))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
 
 class Hotel(Base):
@@ -190,8 +225,8 @@ class Booking(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     code: Mapped[str] = mapped_column(String(12), unique=True, index=True, nullable=False)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id", ondelete="RESTRICT"), index=True, nullable=False
     )
     room_id: Mapped[int] = mapped_column(
         ForeignKey("rooms.id", ondelete="RESTRICT"), index=True, nullable=False

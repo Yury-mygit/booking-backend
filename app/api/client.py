@@ -13,13 +13,14 @@ from app.models.models import (
     AvailabilityStatus,
     Booking,
     BookingStatus,
+    Client,
     Hotel,
     HotelStatus,
     Room,
     UserRole,
 )
 from app.schemas.bookings import BookingResponse, CreateBookingRequest
-from app.utils import date_range_nights, gen_booking_code
+from app.utils import date_range_nights, gen_booking_code, get_or_create_client_for_user
 
 router = APIRouter(prefix="/c", tags=["client"])
 
@@ -129,9 +130,10 @@ async def create_booking(
     else:
         raise APIError(500, "internal", "Failed to generate booking code")
 
+    client = await get_or_create_client_for_user(db, ctx.user)
     booking = Booking(
         code=code,
-        user_id=ctx.user.id,
+        client_id=client.id,
         room_id=payload.room_id,
         check_in=payload.check_in,
         check_out=payload.check_out,
@@ -153,7 +155,8 @@ async def list_my_bookings(
 ) -> list[BookingResponse]:
     stmt = (
         select(Booking)
-        .where(Booking.user_id == ctx.user.id)
+        .join(Client, Client.id == Booking.client_id)
+        .where(Client.user_id == ctx.user.id)
         .order_by(Booking.created_at.desc())
         .limit(100)
     )
@@ -170,7 +173,11 @@ async def get_my_booking(
     db: AsyncSession = Depends(get_db),
 ) -> BookingResponse:
     booking = (
-        await db.execute(select(Booking).where(Booking.code == code, Booking.user_id == ctx.user.id))
+        await db.execute(
+            select(Booking)
+            .join(Client, Client.id == Booking.client_id)
+            .where(Booking.code == code, Client.user_id == ctx.user.id)
+        )
     ).scalar_one_or_none()
     if booking is None:
         raise APIError(404, "not_found", "Booking not found")

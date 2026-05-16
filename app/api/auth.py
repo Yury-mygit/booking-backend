@@ -10,8 +10,35 @@ from app.core.database import get_db
 from app.core.deps import AuthContext, current_user
 from app.core.exceptions import APIError
 from app.core.tg_auth import InitDataError, verify_init_data
-from app.models.models import Lang, Session, User, UserRole
+from app.models.models import Lang, PartnerProfile, Session, User, UserRole
 from app.schemas.auth import AuthTgRequest, AuthTgResponse, AuthTgUser
+from app.utils import get_or_create_client_for_user
+
+
+async def _ensure_partner_profile(db: AsyncSession, user: User) -> PartnerProfile:
+    """Create a partner_profiles row for `user` if missing.
+    New rows start with verified_at=NULL (= pending admin approval)."""
+    pp = (
+        await db.execute(
+            select(PartnerProfile).where(PartnerProfile.user_id == user.id)
+        )
+    ).scalar_one_or_none()
+    if pp is not None:
+        return pp
+    pp = PartnerProfile(
+        user_id=user.id,
+        company_name=(user.first_name or "Partner").strip() or "Partner",
+        verified_at=None,
+    )
+    db.add(pp)
+    await db.flush()
+    return pp
+
+
+def _partner_status(pp: PartnerProfile | None) -> str:
+    if pp is None or pp.verified_at is None:
+        return "pending"
+    return "verified"
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -34,6 +61,8 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
 
     telegram_id: int = tg_user["id"]
     first_name = tg_user.get("first_name")
+    last_name = tg_user.get("last_name")
+    username = tg_user.get("username")
     lang = _coerce_lang(tg_user.get("language_code"))
 
     existing = await db.execute(select(User).where(User.telegram_id == telegram_id))
@@ -57,6 +86,8 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
             role=role,
             lang=lang,
             first_name=first_name,
+            last_name=last_name,
+            username=username,
         )
         db.add(user)
         await db.flush()
@@ -65,6 +96,19 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
         # Refresh display fields, do not overwrite primary role.
         if first_name and user.first_name != first_name:
             user.first_name = first_name
+        if last_name and user.last_name != last_name:
+            user.last_name = last_name
+        if username and user.username != username:
+            user.username = username
+
+    # Auto-create a client profile for any TG user. Walk-in (no telegram_id)
+    # rows live alongside in the same table; this one is the TG-linked profile.
+    if role == UserRole.client:
+        await get_or_create_client_for_user(db, user)
+
+    pp: PartnerProfile | None = None
+    if role == UserRole.partner:
+        pp = await _ensure_partner_profile(db, user)
 
     now = datetime.now(timezone.utc)
     token = secrets.token_urlsafe(32)
@@ -88,12 +132,24 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
             lang=user.lang,
             first_name=user.first_name,
             is_new=is_new,
+            partner_status=_partner_status(pp) if role == UserRole.partner else None,
         ),
     )
 
 
 @router.get("/whoami")
-async def whoami(ctx: AuthContext = Depends(current_user)):
+async def whoami(
+    ctx: AuthContext = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    partner_status: str | None = None
+    if ctx.role == UserRole.partner:
+        pp = (
+            await db.execute(
+                select(PartnerProfile).where(PartnerProfile.user_id == ctx.user.id)
+            )
+        ).scalar_one_or_none()
+        partner_status = _partner_status(pp)
     return {
         "user_id": ctx.user.id,
         "telegram_id": ctx.user.telegram_id,
@@ -101,6 +157,7 @@ async def whoami(ctx: AuthContext = Depends(current_user)):
         "lang": ctx.user.lang.value,
         "first_name": ctx.user.first_name,
         "session_expires_at": ctx.session.expires_at.isoformat(),
+        "partner_status": partner_status,
     }
 
 
@@ -129,6 +186,13 @@ async def dev_login(
         await db.flush()
         is_new = True
 
+    if role == UserRole.client:
+        await get_or_create_client_for_user(db, user)
+
+    pp: PartnerProfile | None = None
+    if role == UserRole.partner:
+        pp = await _ensure_partner_profile(db, user)
+
     now = datetime.now(timezone.utc)
     token = secrets.token_urlsafe(32)
     session = Session(
@@ -150,5 +214,6 @@ async def dev_login(
             lang=user.lang,
             first_name=user.first_name,
             is_new=is_new,
+            partner_status=_partner_status(pp) if role == UserRole.partner else None,
         ),
     )

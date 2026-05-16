@@ -12,6 +12,7 @@ from app.models.models import (
     AvailabilityStatus,
     Booking,
     BookingStatus,
+    Client,
     Hotel,
     HotelStatus,
     PartnerProfile,
@@ -35,15 +36,64 @@ admin_only = require_role(UserRole.admin)
 
 # ─── Users ─────────────────────────────────────────────────────────────────
 
+def _to_admin_user_view(
+    u: User,
+    verified_at,
+    has_profile: bool,
+    hotels_count: int,
+    bookings_count: int,
+) -> AdminUserView:
+    return AdminUserView(
+        id=u.id,
+        telegram_id=u.telegram_id,
+        role=u.role,
+        first_name=u.first_name,
+        last_name=u.last_name,
+        username=u.username,
+        phone=u.phone,
+        email=u.email,
+        created_at=u.created_at,
+        is_verified_partner=verified_at is not None,
+        is_pending_partner=has_profile and verified_at is None,
+        hotels_count=hotels_count,
+        bookings_count=bookings_count,
+    )
+
+
 @router.get("/users", response_model=list[AdminUserView])
 async def list_users(
     role: UserRole | None = Query(default=None),
     verified: bool | None = Query(default=None),
+    pending: bool | None = Query(default=None),
     ctx: AuthContext = Depends(admin_only),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(User, PartnerProfile.verified_at).outerjoin(
-        PartnerProfile, PartnerProfile.user_id == User.id
+    from app.models.models import Client
+    # Aggregate hotels/bookings per user in subqueries so the main row stays flat.
+    hotels_cnt = (
+        select(Hotel.owner_user_id.label("uid"), func.count(Hotel.id).label("cnt"))
+        .group_by(Hotel.owner_user_id)
+        .subquery()
+    )
+    bookings_cnt = (
+        select(Client.user_id.label("uid"), func.count(Booking.id).label("cnt"))
+        .join(Booking, Booking.client_id == Client.id)
+        .where(Client.user_id.is_not(None))
+        .group_by(Client.user_id)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            User,
+            PartnerProfile.user_id.label("pp_uid"),
+            PartnerProfile.verified_at,
+            hotels_cnt.c.cnt.label("hcnt"),
+            bookings_cnt.c.cnt.label("bcnt"),
+        )
+        .outerjoin(PartnerProfile, PartnerProfile.user_id == User.id)
+        .outerjoin(hotels_cnt, hotels_cnt.c.uid == User.id)
+        .outerjoin(bookings_cnt, bookings_cnt.c.uid == User.id)
     )
     if role is not None:
         stmt = stmt.where(User.role == role)
@@ -51,20 +101,22 @@ async def list_users(
         stmt = stmt.where(PartnerProfile.verified_at.is_not(None))
     elif verified is False:
         stmt = stmt.where(PartnerProfile.verified_at.is_(None))
+    if pending is True:
+        stmt = stmt.where(
+            PartnerProfile.user_id.is_not(None), PartnerProfile.verified_at.is_(None)
+        )
     stmt = stmt.order_by(User.created_at.desc()).limit(500)
 
     rows = (await db.execute(stmt)).all()
     return [
-        AdminUserView(
-            id=u.id,
-            telegram_id=u.telegram_id,
-            role=u.role,
-            first_name=u.first_name,
-            phone=u.phone,
-            created_at=u.created_at,
-            is_verified_partner=verified_at is not None,
+        _to_admin_user_view(
+            u,
+            verified_at,
+            pp_uid is not None,
+            hcnt or 0,
+            bcnt or 0,
         )
-        for u, verified_at in rows
+        for u, pp_uid, verified_at, hcnt, bcnt in rows
     ]
 
 
@@ -101,15 +153,8 @@ async def verify_partner(
         profile.verified_at = now
     await db.commit()
 
-    return AdminUserView(
-        id=user.id,
-        telegram_id=user.telegram_id,
-        role=user.role,
-        first_name=user.first_name,
-        phone=user.phone,
-        created_at=user.created_at,
-        is_verified_partner=True,
-    )
+    return _to_admin_user_view(user, verified_at=now, has_profile=True,
+                                hotels_count=0, bookings_count=0)
 
 
 @router.post("/users/{user_id}/promote-admin", response_model=AdminUserView)
@@ -123,15 +168,8 @@ async def promote_admin(
         raise APIError(404, "not_found", "User not found")
     user.role = UserRole.admin
     await db.commit()
-    return AdminUserView(
-        id=user.id,
-        telegram_id=user.telegram_id,
-        role=user.role,
-        first_name=user.first_name,
-        phone=user.phone,
-        created_at=user.created_at,
-        is_verified_partner=False,
-    )
+    return _to_admin_user_view(user, verified_at=None, has_profile=False,
+                                hotels_count=0, bookings_count=0)
 
 
 # ─── Hotels ────────────────────────────────────────────────────────────────
@@ -204,10 +242,10 @@ async def list_all_bookings(
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
-        select(Booking, Room, Hotel, User)
+        select(Booking, Room, Hotel, Client)
         .join(Room, Room.id == Booking.room_id)
         .join(Hotel, Hotel.id == Room.hotel_id)
-        .join(User, User.id == Booking.user_id)
+        .join(Client, Client.id == Booking.client_id)
         .order_by(Booking.created_at.desc())
         .limit(500)
     )
@@ -220,8 +258,8 @@ async def list_all_bookings(
         AdminBookingView(
             id=b.id,
             code=b.code,
-            user_id=b.user_id,
-            user_first_name=u.first_name,
+            client_id=b.client_id,
+            client_first_name=c.first_name,
             room_id=b.room_id,
             hotel_id=h.id,
             hotel_name_ru=h.name_ru,
@@ -232,7 +270,7 @@ async def list_all_bookings(
             status=b.status,
             created_at=b.created_at,
         )
-        for b, r, h, u in rows
+        for b, r, h, c in rows
     ]
 
 
@@ -283,20 +321,20 @@ async def cancel_booking(
     booking.status = BookingStatus.cancelled
     await db.commit()
 
-    room_hotel = (
+    row = (
         await db.execute(
-            select(Room, Hotel, User)
+            select(Room, Hotel, Client)
             .join(Hotel, Hotel.id == Room.hotel_id)
-            .join(User, User.id == booking.user_id)
+            .join(Client, Client.id == booking.client_id)
             .where(Room.id == booking.room_id)
         )
     ).first()
-    _, hotel, user = room_hotel
+    _, hotel, client = row
     return AdminBookingView(
         id=booking.id,
         code=booking.code,
-        user_id=booking.user_id,
-        user_first_name=user.first_name,
+        client_id=booking.client_id,
+        client_first_name=client.first_name,
         room_id=booking.room_id,
         hotel_id=hotel.id,
         hotel_name_ru=hotel.name_ru,

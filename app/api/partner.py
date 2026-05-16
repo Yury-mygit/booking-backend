@@ -6,13 +6,14 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import AuthContext, require_role
+from app.core.deps import AuthContext, require_verified_partner
 from app.core.exceptions import APIError
 from app.models.models import (
     Availability,
     AvailabilityStatus,
     Booking,
     BookingStatus,
+    Client,
     Hotel,
     HotelService,
     Room,
@@ -22,18 +23,29 @@ from app.models.models import (
 from app.schemas.partner import (
     AvailabilityBatchUpdate,
     AvailabilityRowOut,
+    ClientLookup,
+    ClientPartnerView,
+    ClientUpdate,
     HotelCreate,
     HotelPartnerView,
     HotelUpdate,
     PartnerBookingView,
     RoomCreate,
+    RoomFlatView,
     RoomPartnerView,
     RoomUpdate,
     ServiceCreate,
     ServicePartnerView,
     ServiceUpdate,
+    WalkinBookingCreate,
 )
-from app.utils import gen_unique_hotel_slug
+from app.utils import (
+    date_range_nights,
+    gen_booking_code,
+    gen_unique_hotel_slug,
+    normalize_email,
+    normalize_phone,
+)
 
 router = APIRouter(prefix="/p", tags=["partner"])
 
@@ -107,7 +119,7 @@ def _to_room_view(r: Room) -> RoomPartnerView:
 
 @router.get("/hotels", response_model=list[HotelPartnerView])
 async def list_my_hotels(
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     rows = (
@@ -127,7 +139,7 @@ async def list_my_hotels(
 @router.post("/hotels", response_model=HotelPartnerView, status_code=201)
 async def create_hotel(
     payload: HotelCreate,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     h = Hotel(
@@ -156,7 +168,7 @@ async def create_hotel(
 @router.get("/hotels/{hotel_id}", response_model=HotelPartnerView)
 async def get_my_hotel(
     hotel_id: int,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     return _to_hotel_view(await _get_my_hotel(db, ctx, hotel_id))
@@ -166,7 +178,7 @@ async def get_my_hotel(
 async def update_hotel(
     hotel_id: int,
     payload: HotelUpdate,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     h = await _get_my_hotel(db, ctx, hotel_id)
@@ -184,19 +196,30 @@ async def update_hotel(
 @router.delete("/hotels/{hotel_id}", status_code=204)
 async def delete_hotel(
     hotel_id: int,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     h = await _get_my_hotel(db, ctx, hotel_id)
-    has_bookings = (
+    today = date.today()
+    has_active = (
         await db.execute(
             select(exists().where(
-                and_(Room.hotel_id == h.id, Booking.room_id == Room.id)
+                and_(
+                    Room.hotel_id == h.id,
+                    Booking.room_id == Room.id,
+                    Booking.status.in_([BookingStatus.pending, BookingStatus.paid]),
+                    Booking.check_out >= today,
+                )
             ))
         )
     ).scalar()
-    if has_bookings:
-        raise APIError(409, "conflict", "Hotel has bookings; cannot hard-delete")
+    if has_active:
+        raise APIError(409, "conflict", "Hotel has active bookings; cannot hard-delete")
+    await db.execute(
+        delete(Booking).where(
+            Booking.room_id.in_(select(Room.id).where(Room.hotel_id == h.id))
+        )
+    )
     await db.delete(h)
     await db.commit()
     return None
@@ -207,7 +230,7 @@ async def delete_hotel(
 @router.get("/hotels/{hotel_id}/rooms", response_model=list[RoomPartnerView])
 async def list_rooms(
     hotel_id: int,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     await _get_my_hotel(db, ctx, hotel_id)
@@ -227,7 +250,7 @@ async def list_rooms(
 async def create_room(
     hotel_id: int,
     payload: RoomCreate,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     await _get_my_hotel(db, ctx, hotel_id)
@@ -242,7 +265,7 @@ async def create_room(
 async def get_room(
     hotel_id: int,
     room_id: int,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     return _to_room_view(await _get_my_room(db, ctx, hotel_id, room_id))
@@ -270,7 +293,7 @@ async def update_room(
     hotel_id: int,
     room_id: int,
     payload: RoomUpdate,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     r = await _get_my_room(db, ctx, hotel_id, room_id)
@@ -291,7 +314,7 @@ async def update_room(
 async def delete_room(
     hotel_id: int,
     room_id: int,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     r = await _get_my_room(db, ctx, hotel_id, room_id)
@@ -313,7 +336,7 @@ async def get_availability(
     room_id: int,
     from_: date = Query(alias="from"),
     to: date = Query(...),
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     await _get_my_room(db, ctx, hotel_id, room_id)
@@ -348,7 +371,7 @@ async def update_availability(
     hotel_id: int,
     room_id: int,
     payload: AvailabilityBatchUpdate,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     await _get_my_room(db, ctx, hotel_id, room_id)
@@ -466,7 +489,7 @@ async def _get_my_service(
 @router.get("/hotels/{hotel_id}/services", response_model=list[ServicePartnerView])
 async def list_services(
     hotel_id: int,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     await _get_my_hotel(db, ctx, hotel_id)
@@ -486,7 +509,7 @@ async def list_services(
 async def create_service(
     hotel_id: int,
     payload: ServiceCreate,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     await _get_my_hotel(db, ctx, hotel_id)
@@ -502,7 +525,7 @@ async def update_service(
     hotel_id: int,
     service_id: int,
     payload: ServiceUpdate,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     s = await _get_my_service(db, ctx, hotel_id, service_id)
@@ -518,7 +541,7 @@ async def update_service(
 async def delete_service(
     hotel_id: int,
     service_id: int,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     s = await _get_my_service(db, ctx, hotel_id, service_id)
@@ -532,14 +555,14 @@ async def delete_service(
 @router.get("/bookings", response_model=list[PartnerBookingView])
 async def list_incoming_bookings(
     status_filter: BookingStatus | None = Query(default=None, alias="status"),
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
-        select(Booking, Room, Hotel, User)
+        select(Booking, Room, Hotel, Client)
         .join(Room, Room.id == Booking.room_id)
         .join(Hotel, Hotel.id == Room.hotel_id)
-        .join(User, User.id == Booking.user_id)
+        .join(Client, Client.id == Booking.client_id)
         .where(Hotel.owner_user_id == ctx.user.id)
         .order_by(Booking.created_at.desc())
         .limit(200)
@@ -556,7 +579,7 @@ async def list_incoming_bookings(
             room_name_ru=r.name_ru,
             hotel_id=h.id,
             hotel_name_ru=h.name_ru,
-            client_first_name=u.first_name,
+            client_first_name=c.first_name,
             check_in=b.check_in,
             check_out=b.check_out,
             guests=b.guests,
@@ -564,19 +587,19 @@ async def list_incoming_bookings(
             status=b.status,
             created_at=b.created_at,
         )
-        for b, r, h, u in rows
+        for b, r, h, c in rows
     ]
 
 
 async def _get_my_booking(
     db: AsyncSession, ctx: AuthContext, code: str
-) -> tuple[Booking, Room, Hotel, User]:
+) -> tuple[Booking, Room, Hotel, Client]:
     row = (
         await db.execute(
-            select(Booking, Room, Hotel, User)
+            select(Booking, Room, Hotel, Client)
             .join(Room, Room.id == Booking.room_id)
             .join(Hotel, Hotel.id == Room.hotel_id)
-            .join(User, User.id == Booking.user_id)
+            .join(Client, Client.id == Booking.client_id)
             .where(Booking.code == code, Hotel.owner_user_id == ctx.user.id)
             .with_for_update(of=Booking)
         )
@@ -586,7 +609,7 @@ async def _get_my_booking(
     return row
 
 
-def _to_partner_booking(b: Booking, r: Room, h: Hotel, u: User) -> PartnerBookingView:
+def _to_partner_booking(b: Booking, r: Room, h: Hotel, c: Client) -> PartnerBookingView:
     return PartnerBookingView(
         id=b.id,
         code=b.code,
@@ -594,7 +617,7 @@ def _to_partner_booking(b: Booking, r: Room, h: Hotel, u: User) -> PartnerBookin
         room_name_ru=r.name_ru,
         hotel_id=h.id,
         hotel_name_ru=h.name_ru,
-        client_first_name=u.first_name,
+        client_first_name=c.first_name,
         check_in=b.check_in,
         check_out=b.check_out,
         guests=b.guests,
@@ -607,25 +630,25 @@ def _to_partner_booking(b: Booking, r: Room, h: Hotel, u: User) -> PartnerBookin
 @router.post("/bookings/{code}/confirm", response_model=PartnerBookingView)
 async def confirm_booking(
     code: str,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    b, r, h, u = await _get_my_booking(db, ctx, code)
+    b, r, h, c = await _get_my_booking(db, ctx, code)
     if b.status != BookingStatus.pending:
         raise APIError(409, "conflict", f"Booking is {b.status.value}, only pending can be confirmed")
     b.status = BookingStatus.paid
     await db.commit()
     await db.refresh(b)
-    return _to_partner_booking(b, r, h, u)
+    return _to_partner_booking(b, r, h, c)
 
 
 @router.post("/bookings/{code}/cancel", response_model=PartnerBookingView)
 async def cancel_booking(
     code: str,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    b, r, h, u = await _get_my_booking(db, ctx, code)
+    b, r, h, c = await _get_my_booking(db, ctx, code)
     if b.status in (BookingStatus.cancelled, BookingStatus.refunded):
         raise APIError(409, "conflict", f"Booking is already {b.status.value}")
 
@@ -658,4 +681,320 @@ async def cancel_booking(
     b.status = BookingStatus.cancelled
     await db.commit()
     await db.refresh(b)
-    return _to_partner_booking(b, r, h, u)
+    return _to_partner_booking(b, r, h, c)
+
+
+# ─── Walk-in bookings ─────────────────────────────────────────────────────
+
+async def _find_or_create_client_for_walkin(
+    db: AsyncSession, payload: WalkinBookingCreate
+) -> Client:
+    """Dedup walk-in clients by normalized phone / email; create otherwise."""
+    norm_phone = normalize_phone(payload.phone)
+    norm_email = normalize_email(payload.email)
+    existing: Client | None = None
+    if norm_phone:
+        existing = (
+            await db.execute(select(Client).where(Client.phone == norm_phone))
+        ).scalar_one_or_none()
+    if existing is None and norm_email:
+        existing = (
+            await db.execute(select(Client).where(Client.email == norm_email))
+        ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    c = Client(
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        phone=norm_phone,
+        email=norm_email,
+        doc_kind=payload.doc_kind,
+        doc_number=payload.doc_number,
+    )
+    db.add(c)
+    await db.flush()
+    return c
+
+
+@router.post("/walkin-bookings", response_model=PartnerBookingView, status_code=201)
+async def create_walkin_booking(
+    payload: WalkinBookingCreate,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    if payload.check_out <= payload.check_in:
+        raise APIError(400, "bad_request", "check_out must be after check_in")
+    today = date.today()
+    if payload.check_in < today:
+        raise APIError(400, "bad_request", "check_in is in the past")
+
+    # Verify room belongs to this partner's hotel + lock it.
+    row = (
+        await db.execute(
+            select(Room, Hotel)
+            .join(Hotel, Hotel.id == Room.hotel_id)
+            .where(Room.id == payload.room_id, Hotel.owner_user_id == ctx.user.id)
+            .with_for_update(of=Room)
+        )
+    ).first()
+    if row is None:
+        raise APIError(404, "not_found", "Room not found")
+    room, hotel = row
+    if room.capacity < payload.guests:
+        raise APIError(400, "bad_request", "Too many guests for this room")
+
+    # Lock availability rows in range; verify nothing is blocked/booked.
+    nights = list(date_range_nights(payload.check_in, payload.check_out))
+    existing_av = (
+        await db.execute(
+            select(Availability)
+            .where(
+                Availability.room_id == room.id,
+                Availability.date >= payload.check_in,
+                Availability.date < payload.check_out,
+            )
+            .with_for_update()
+        )
+    ).scalars().all()
+    by_date = {a.date: a for a in existing_av}
+    for d in nights:
+        a = by_date.get(d)
+        if a is not None and a.status in (AvailabilityStatus.blocked, AvailabilityStatus.booked):
+            raise APIError(409, "conflict", f"Night {d.isoformat()} is not available")
+
+    total = 0
+    for d in nights:
+        a = by_date.get(d)
+        total += a.price_override if (a and a.price_override is not None) else room.price_kgs
+
+    for d in nights:
+        stmt = (
+            pg_insert(Availability)
+            .values(room_id=room.id, date=d, status=AvailabilityStatus.booked)
+            .on_conflict_do_update(
+                index_elements=["room_id", "date"],
+                set_={"status": AvailabilityStatus.booked},
+            )
+        )
+        await db.execute(stmt)
+
+    client = await _find_or_create_client_for_walkin(db, payload)
+
+    for _ in range(5):
+        code = gen_booking_code()
+        clash = (
+            await db.execute(select(Booking.id).where(Booking.code == code))
+        ).scalar_one_or_none()
+        if clash is None:
+            break
+    else:
+        raise APIError(500, "internal", "Failed to generate booking code")
+
+    booking = Booking(
+        code=code,
+        client_id=client.id,
+        room_id=room.id,
+        check_in=payload.check_in,
+        check_out=payload.check_out,
+        guests=payload.guests,
+        total_kgs=total,
+        status=BookingStatus.pending,
+    )
+    db.add(booking)
+    await db.commit()
+    await db.refresh(booking)
+    return _to_partner_booking(booking, room, hotel, client)
+
+
+# ─── /p/rooms (flat list with today_status) ────────────────────────────────
+
+@router.get("/rooms", response_model=list[RoomFlatView])
+async def list_all_my_rooms(
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    today = date.today()
+    rows = (
+        await db.execute(
+            select(Room, Hotel)
+            .join(Hotel, Hotel.id == Room.hotel_id)
+            .where(Hotel.owner_user_id == ctx.user.id)
+            .order_by(Hotel.name_ru, Room.id)
+        )
+    ).all()
+    if not rows:
+        return []
+
+    room_ids = [r.id for r, _ in rows]
+    av_rows = (
+        await db.execute(
+            select(Availability)
+            .where(Availability.room_id.in_(room_ids), Availability.date == today)
+        )
+    ).scalars().all()
+    today_by_room = {a.room_id: a.status for a in av_rows}
+
+    out: list[RoomFlatView] = []
+    for r, h in rows:
+        photo = (r.photos or [None])[0] if r.photos else None
+        out.append(RoomFlatView(
+            room_id=r.id,
+            room_name_ru=r.name_ru,
+            hotel_id=h.id,
+            hotel_name_ru=h.name_ru,
+            capacity=r.capacity,
+            beds=r.beds,
+            floor=r.floor,
+            price_kgs=r.price_kgs,
+            today_status=today_by_room.get(r.id, AvailabilityStatus.free),
+            photo=photo,
+        ))
+    return out
+
+
+# ─── /p/clients ────────────────────────────────────────────────────────────
+
+async def _client_visible_to_me(
+    db: AsyncSession, partner_user_id: int, client_id: int
+) -> Client | None:
+    """A client is visible to a partner only if they have a booking in one
+    of the partner's hotels."""
+    stmt = (
+        select(Client)
+        .join(Booking, Booking.client_id == Client.id)
+        .join(Room, Room.id == Booking.room_id)
+        .join(Hotel, Hotel.id == Room.hotel_id)
+        .where(Client.id == client_id, Hotel.owner_user_id == partner_user_id)
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+def _to_client_view(c: Client, bookings_count: int, last_date: date | None) -> ClientPartnerView:
+    return ClientPartnerView(
+        id=c.id,
+        user_id=c.user_id,
+        first_name=c.first_name,
+        last_name=c.last_name,
+        phone=c.phone,
+        email=c.email,
+        doc_kind=c.doc_kind,
+        doc_number=c.doc_number,
+        photo_url=c.photo_url,
+        bookings_count=bookings_count,
+        last_booking_date=last_date,
+        created_at=c.created_at,
+    )
+
+
+@router.get("/clients", response_model=list[ClientPartnerView])
+async def list_my_clients(
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    """All clients who have at least one booking in any of my hotels.
+    bookings_count / last_booking_date are scoped to MY hotels only."""
+    from sqlalchemy import func as sa_func
+    stmt = (
+        select(
+            Client,
+            sa_func.count(Booking.id).label("cnt"),
+            sa_func.max(Booking.check_in).label("last_date"),
+        )
+        .join(Booking, Booking.client_id == Client.id)
+        .join(Room, Room.id == Booking.room_id)
+        .join(Hotel, Hotel.id == Room.hotel_id)
+        .where(Hotel.owner_user_id == ctx.user.id)
+        .group_by(Client.id)
+        .order_by(sa_func.max(Booking.created_at).desc())
+        .limit(500)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [_to_client_view(c, cnt, last) for (c, cnt, last) in rows]
+
+
+@router.post("/clients/lookup", response_model=ClientPartnerView | None)
+async def lookup_client(
+    payload: ClientLookup,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    """For the walk-in form: find existing client by phone or email so the
+    partner can pre-fill. Returns the global record (scope-agnostic). Returns
+    null if nothing matched."""
+    norm_phone = normalize_phone(payload.phone)
+    norm_email = normalize_email(payload.email)
+    if not norm_phone and not norm_email:
+        return None
+    c: Client | None = None
+    if norm_phone:
+        c = (await db.execute(select(Client).where(Client.phone == norm_phone))).scalar_one_or_none()
+    if c is None and norm_email:
+        c = (await db.execute(select(Client).where(Client.email == norm_email))).scalar_one_or_none()
+    if c is None:
+        return None
+    return _to_client_view(c, bookings_count=0, last_date=None)
+
+
+@router.get("/clients/{client_id}", response_model=ClientPartnerView)
+async def get_my_client(
+    client_id: int,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    c = await _client_visible_to_me(db, ctx.user.id, client_id)
+    if c is None:
+        raise APIError(404, "not_found", "Client not found")
+    from sqlalchemy import func as sa_func
+    cnt, last = (
+        await db.execute(
+            select(sa_func.count(Booking.id), sa_func.max(Booking.check_in))
+            .join(Room, Room.id == Booking.room_id)
+            .join(Hotel, Hotel.id == Room.hotel_id)
+            .where(Booking.client_id == c.id, Hotel.owner_user_id == ctx.user.id)
+        )
+    ).one()
+    return _to_client_view(c, cnt or 0, last)
+
+
+@router.get("/clients/{client_id}/bookings", response_model=list[PartnerBookingView])
+async def list_my_client_bookings(
+    client_id: int,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    c = await _client_visible_to_me(db, ctx.user.id, client_id)
+    if c is None:
+        raise APIError(404, "not_found", "Client not found")
+    rows = (
+        await db.execute(
+            select(Booking, Room, Hotel)
+            .join(Room, Room.id == Booking.room_id)
+            .join(Hotel, Hotel.id == Room.hotel_id)
+            .where(Booking.client_id == c.id, Hotel.owner_user_id == ctx.user.id)
+            .order_by(Booking.created_at.desc())
+        )
+    ).all()
+    return [_to_partner_booking(b, r, h, c) for (b, r, h) in rows]
+
+
+@router.put("/clients/{client_id}", response_model=ClientPartnerView)
+async def update_my_client(
+    client_id: int,
+    payload: ClientUpdate,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    c = await _client_visible_to_me(db, ctx.user.id, client_id)
+    if c is None:
+        raise APIError(404, "not_found", "Client not found")
+    data = payload.model_dump(exclude_unset=True)
+    if "phone" in data:
+        data["phone"] = normalize_phone(data["phone"])
+    if "email" in data:
+        data["email"] = normalize_email(data["email"])
+    for k, v in data.items():
+        setattr(c, k, v)
+    await db.commit()
+    await db.refresh(c)
+    return _to_client_view(c, bookings_count=0, last_date=None)

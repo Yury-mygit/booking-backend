@@ -16,6 +16,9 @@ class AuthTgUser(BaseModel):
     lang: Lang
     first_name: str | None
     is_new: bool
+    # Only meaningful when role == "partner": "pending" until an admin verifies,
+    # then "verified". For other roles — null.
+    partner_status: str | None = None
 
 
 class AuthTgResponse(BaseModel):

@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import AuthContext, require_role
+from app.core.deps import AuthContext, require_role, require_verified_partner
 from app.core.exceptions import APIError
 from app.models.models import UserRole
 
@@ -84,7 +84,7 @@ def _room_url(room_id: int, filename: str) -> str:
 async def upload_photo(
     hotel_id: int,
     file: UploadFile = File(...),
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     h = await _get_my_hotel_or_404(db, ctx, hotel_id)
@@ -119,7 +119,7 @@ async def upload_photo(
 async def delete_photo(
     hotel_id: int,
     url: str = Query(...),
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     h = await _get_my_hotel_or_404(db, ctx, hotel_id)
@@ -148,7 +148,7 @@ async def delete_photo(
 async def reorder_photos(
     hotel_id: int,
     payload: PhotosReorder,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     h = await _get_my_hotel_or_404(db, ctx, hotel_id)
@@ -182,7 +182,7 @@ async def serve_photo(hotel_id: int, filename: str):
 async def upload_room_photo(
     room_id: int,
     file: UploadFile = File(...),
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     r = await _get_my_room_or_404(db, ctx, room_id)
@@ -217,7 +217,7 @@ async def upload_room_photo(
 async def delete_room_photo(
     room_id: int,
     url: str = Query(...),
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     r = await _get_my_room_or_404(db, ctx, room_id)
@@ -245,7 +245,7 @@ async def delete_room_photo(
 async def reorder_room_photos(
     room_id: int,
     payload: PhotosReorder,
-    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     r = await _get_my_room_or_404(db, ctx, room_id)
@@ -264,6 +264,108 @@ async def serve_room_photo(room_id: int, filename: str):
     if "/" in filename or "\\" in filename or ".." in filename:
         raise APIError(400, "bad_request", "Invalid filename")
     p = _safe_room_dir(room_id) / filename
+    if not p.exists() or not p.is_file():
+        raise APIError(404, "not_found", "Photo not found")
+    return FileResponse(p)
+
+
+# ─── Client photos ─────────────────────────────────────────────────────────
+
+def _safe_client_dir(client_id: int) -> Path:
+    return Path(settings.storage_path) / "clients" / str(client_id)
+
+
+def _client_url(client_id: int, filename: str) -> str:
+    return f"/api/v1/photos/clients/{client_id}/{filename}"
+
+
+async def _get_my_client_or_404(db: AsyncSession, ctx: AuthContext, client_id: int):
+    from app.models.models import Booking, Client, Hotel, Room
+    from sqlalchemy import select as _sel
+    stmt = (
+        _sel(Client)
+        .join(Booking, Booking.client_id == Client.id)
+        .join(Room, Room.id == Booking.room_id)
+        .join(Hotel, Hotel.id == Room.hotel_id)
+        .where(Client.id == client_id, Hotel.owner_user_id == ctx.user.id)
+        .limit(1)
+    )
+    c = (await db.execute(stmt)).scalar_one_or_none()
+    if c is None:
+        raise APIError(404, "not_found", "Client not found")
+    return c
+
+
+@router.post("/p/clients/{client_id}/photo")
+async def upload_client_photo(
+    client_id: int,
+    file: UploadFile = File(...),
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    c = await _get_my_client_or_404(db, ctx, client_id)
+
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in ALLOWED_EXT:
+        raise APIError(400, "bad_format", "Allowed: jpg, jpeg, png, webp")
+    data = await file.read()
+    if len(data) == 0:
+        raise APIError(400, "empty", "Empty file")
+    if len(data) > settings.photo_max_bytes:
+        raise APIError(400, "too_large", f"Max {settings.photo_max_bytes} bytes")
+    if not any(data.startswith(m) for m in _MAGIC):
+        raise APIError(400, "bad_format", "Not a valid image")
+
+    dst_dir = _safe_client_dir(client_id)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    fname = secrets.token_urlsafe(12) + ext
+    (dst_dir / fname).write_bytes(data)
+
+    # Replace previous photo (single-photo model for clients).
+    prev = c.photo_url
+    url = _client_url(client_id, fname)
+    c.photo_url = url
+    await db.commit()
+
+    if prev and prev.startswith(f"/api/v1/photos/clients/{client_id}/"):
+        old_fname = prev.rsplit("/", 1)[-1]
+        if "/" not in old_fname and ".." not in old_fname:
+            old_p = _safe_client_dir(client_id) / old_fname
+            if old_p.exists():
+                try:
+                    old_p.unlink()
+                except OSError:
+                    pass
+    return {"url": url}
+
+
+@router.delete("/p/clients/{client_id}/photo", status_code=204)
+async def delete_client_photo(
+    client_id: int,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    c = await _get_my_client_or_404(db, ctx, client_id)
+    prev = c.photo_url
+    c.photo_url = None
+    await db.commit()
+    if prev and prev.startswith(f"/api/v1/photos/clients/{client_id}/"):
+        fname = prev.rsplit("/", 1)[-1]
+        if "/" not in fname and ".." not in fname:
+            p = _safe_client_dir(client_id) / fname
+            if p.exists():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+    return None
+
+
+@router.get("/photos/clients/{client_id}/{filename}")
+async def serve_client_photo(client_id: int, filename: str):
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise APIError(400, "bad_request", "Invalid filename")
+    p = _safe_client_dir(client_id) / filename
     if not p.exists() or not p.is_file():
         raise APIError(404, "not_found", "Photo not found")
     return FileResponse(p)

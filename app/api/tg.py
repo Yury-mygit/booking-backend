@@ -26,24 +26,24 @@ _ROLE_CONFIG = {
 def _build_target_url(base_url: str, start_param: str) -> str:
     """Map /start param into the right WebApp URL.
 
-    NB: query string, not hash. On Telegram mobile the WebApp container
-    overwrites `location.hash` with its own `tgWebAppData=...`, so a hash like
-    `#/hotel/5` would be lost. The frontend reads `location.search` on bootstrap
-    and redirects into the right hash-route itself.
+    Identifier is a slug (a-z0-9-) or numeric id. Optional dates appended via _.
+    NB: query string, not hash (Telegram mobile overwrites location.hash).
     """
     if not start_param:
         return base_url
+    # Try full form first: hotel_<slug>_<ci>_<co>_<guests>
     m = re.match(
-        r"^hotel_(\d+)(?:_(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})_(\d+))?$",
+        r"^hotel_(.+)_(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})_(\d+)$",
         start_param,
     )
+    if m:
+        slug, ci, co, g = m.groups()
+        return f"{base_url}?hotel={slug}&check_in={ci}&check_out={co}&guests={g}"
+    m = re.match(r"^hotel_(.+)$", start_param)
     if not m:
         return base_url
-    hid, ci, co, g = m.groups()
-    url = f"{base_url}?hotel={hid}"
-    if ci:
-        url += f"&check_in={ci}&check_out={co}&guests={g}"
-    return url
+    slug = m.group(1)
+    return f"{base_url}?hotel={slug}"
 
 
 @router.post("/{role}")

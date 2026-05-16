@@ -75,6 +75,7 @@ async def list_hotels(
     return [
         HotelListItem(
             id=h.id,
+            slug=h.slug,
             name_ru=h.name_ru,
             name_ky=h.name_ky,
             name_en=h.name_en,
@@ -87,9 +88,9 @@ async def list_hotels(
     ]
 
 
-@router.get("/hotels/{hotel_id}", response_model=HotelDetails)
+@router.get("/hotels/{slug_or_id}", response_model=HotelDetails)
 async def hotel_details(
-    hotel_id: int,
+    slug_or_id: str,
     check_in: date | None = Query(default=None),
     check_out: date | None = Query(default=None),
     guests: int = Query(default=1, ge=1, le=20),
@@ -97,15 +98,15 @@ async def hotel_details(
 ) -> HotelDetails:
     _validate_date_range(check_in, check_out)
 
-    hotel = (
-        await db.execute(
-            select(Hotel).where(
-                Hotel.id == hotel_id, Hotel.status == HotelStatus.published
-            )
-        )
-    ).scalar_one_or_none()
+    stmt = select(Hotel).where(Hotel.status == HotelStatus.published)
+    if slug_or_id.isdigit():
+        stmt = stmt.where(Hotel.id == int(slug_or_id))
+    else:
+        stmt = stmt.where(Hotel.slug == slug_or_id)
+    hotel = (await db.execute(stmt)).scalar_one_or_none()
     if hotel is None:
         raise APIError(404, "not_found", "Hotel not found")
+    hotel_id = hotel.id
 
     rooms = (
         (await db.execute(select(Room).where(Room.hotel_id == hotel_id))).scalars().all()
@@ -182,6 +183,7 @@ async def hotel_details(
 
     return HotelDetails(
         id=hotel.id,
+        slug=hotel.slug,
         name_ru=hotel.name_ru,
         name_ky=hotel.name_ky,
         name_en=hotel.name_en,

@@ -36,6 +36,7 @@ class HotelUpdate(BaseModel):
 
 class HotelPartnerView(BaseModel):
     id: int
+    slug: str
     name_ru: str
     name_ky: str | None
     name_en: str | None

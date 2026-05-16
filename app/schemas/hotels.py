@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class HotelListItem(BaseModel):
     id: int
+    slug: str
     name_ru: str
     name_ky: str | None
     name_en: str | None
@@ -39,6 +40,7 @@ class ServicePublicView(BaseModel):
 
 class HotelDetails(BaseModel):
     id: int
+    slug: str
     name_ru: str
     name_ky: str | None
     name_en: str | None

@@ -33,6 +33,7 @@ from app.schemas.partner import (
     ServicePartnerView,
     ServiceUpdate,
 )
+from app.utils import gen_unique_hotel_slug
 
 router = APIRouter(prefix="/p", tags=["partner"])
 
@@ -65,6 +66,7 @@ async def _get_my_room(
 def _to_hotel_view(h: Hotel) -> HotelPartnerView:
     return HotelPartnerView(
         id=h.id,
+        slug=h.slug,
         name_ru=h.name_ru,
         name_ky=h.name_ky,
         name_en=h.name_en,
@@ -128,6 +130,7 @@ async def create_hotel(
 ):
     h = Hotel(
         owner_user_id=ctx.user.id,
+        slug="__pending__",  # placeholder; replaced after flush() gives id
         name_ru=payload.name_ru,
         name_ky=payload.name_ky,
         name_en=payload.name_en,
@@ -141,6 +144,8 @@ async def create_hotel(
         photos=payload.photos,
     )
     db.add(h)
+    await db.flush()  # need h.id for slug fallback
+    h.slug = await gen_unique_hotel_slug(db, payload.name_en, h.id, exclude_id=h.id)
     await db.commit()
     await db.refresh(h)
     return _to_hotel_view(h)
@@ -164,8 +169,11 @@ async def update_hotel(
 ):
     h = await _get_my_hotel(db, ctx, hotel_id)
     data = payload.model_dump(exclude_unset=True)
+    name_en_changed = "name_en" in data and data["name_en"] != h.name_en
     for field, value in data.items():
         setattr(h, field, value)
+    if name_en_changed:
+        h.slug = await gen_unique_hotel_slug(db, h.name_en, h.id, exclude_id=h.id)
     await db.commit()
     await db.refresh(h)
     return _to_hotel_view(h)

@@ -98,6 +98,7 @@ class Hotel(Base):
     __tablename__ = "hotels"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
     owner_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False
     )

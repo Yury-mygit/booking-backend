@@ -1,0 +1,327 @@
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.core.deps import AuthContext, require_role
+from app.core.exceptions import APIError
+from app.models.models import (
+    Availability,
+    AvailabilityStatus,
+    Booking,
+    BookingStatus,
+    Hotel,
+    HotelStatus,
+    PartnerProfile,
+    Payment,
+    PaymentStatus,
+    Room,
+    User,
+    UserRole,
+)
+from app.schemas.admin import (
+    AdminBookingView,
+    AdminHotelView,
+    AdminUserView,
+    HotelStatusUpdate,
+    MetricsView,
+)
+
+router = APIRouter(prefix="/admin", tags=["admin"])
+admin_only = require_role(UserRole.admin)
+
+
+# ─── Users ─────────────────────────────────────────────────────────────────
+
+@router.get("/users", response_model=list[AdminUserView])
+async def list_users(
+    role: UserRole | None = Query(default=None),
+    verified: bool | None = Query(default=None),
+    ctx: AuthContext = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(User, PartnerProfile.verified_at).outerjoin(
+        PartnerProfile, PartnerProfile.user_id == User.id
+    )
+    if role is not None:
+        stmt = stmt.where(User.role == role)
+    if verified is True:
+        stmt = stmt.where(PartnerProfile.verified_at.is_not(None))
+    elif verified is False:
+        stmt = stmt.where(PartnerProfile.verified_at.is_(None))
+    stmt = stmt.order_by(User.created_at.desc()).limit(500)
+
+    rows = (await db.execute(stmt)).all()
+    return [
+        AdminUserView(
+            id=u.id,
+            telegram_id=u.telegram_id,
+            role=u.role,
+            first_name=u.first_name,
+            phone=u.phone,
+            created_at=u.created_at,
+            is_verified_partner=verified_at is not None,
+        )
+        for u, verified_at in rows
+    ]
+
+
+@router.post("/users/{user_id}/verify-partner", response_model=AdminUserView)
+async def verify_partner(
+    user_id: int,
+    company_name: str = Query(...),
+    legal_inn: str | None = Query(default=None),
+    ctx: AuthContext = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+):
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if user is None:
+        raise APIError(404, "not_found", "User not found")
+    if user.role != UserRole.partner:
+        raise APIError(400, "bad_request", "User is not a partner")
+
+    profile = (
+        await db.execute(select(PartnerProfile).where(PartnerProfile.user_id == user_id))
+    ).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if profile is None:
+        db.add(
+            PartnerProfile(
+                user_id=user_id,
+                company_name=company_name,
+                legal_inn=legal_inn,
+                verified_at=now,
+            )
+        )
+    else:
+        profile.company_name = company_name
+        profile.legal_inn = legal_inn
+        profile.verified_at = now
+    await db.commit()
+
+    return AdminUserView(
+        id=user.id,
+        telegram_id=user.telegram_id,
+        role=user.role,
+        first_name=user.first_name,
+        phone=user.phone,
+        created_at=user.created_at,
+        is_verified_partner=True,
+    )
+
+
+@router.post("/users/{user_id}/promote-admin", response_model=AdminUserView)
+async def promote_admin(
+    user_id: int,
+    ctx: AuthContext = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+):
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if user is None:
+        raise APIError(404, "not_found", "User not found")
+    user.role = UserRole.admin
+    await db.commit()
+    return AdminUserView(
+        id=user.id,
+        telegram_id=user.telegram_id,
+        role=user.role,
+        first_name=user.first_name,
+        phone=user.phone,
+        created_at=user.created_at,
+        is_verified_partner=False,
+    )
+
+
+# ─── Hotels ────────────────────────────────────────────────────────────────
+
+@router.get("/hotels", response_model=list[AdminHotelView])
+async def list_all_hotels(
+    status_filter: HotelStatus | None = Query(default=None, alias="status"),
+    ctx: AuthContext = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Hotel, User.first_name)
+        .join(User, User.id == Hotel.owner_user_id)
+        .order_by(Hotel.created_at.desc())
+        .limit(500)
+    )
+    if status_filter is not None:
+        stmt = stmt.where(Hotel.status == status_filter)
+    rows = (await db.execute(stmt)).all()
+    return [
+        AdminHotelView(
+            id=h.id,
+            owner_user_id=h.owner_user_id,
+            owner_first_name=owner_name,
+            name_ru=h.name_ru,
+            city=h.city,
+            status=h.status,
+            created_at=h.created_at,
+            updated_at=h.updated_at,
+        )
+        for h, owner_name in rows
+    ]
+
+
+@router.put("/hotels/{hotel_id}/status", response_model=AdminHotelView)
+async def set_hotel_status(
+    hotel_id: int,
+    payload: HotelStatusUpdate,
+    ctx: AuthContext = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+):
+    hotel = (await db.execute(select(Hotel).where(Hotel.id == hotel_id))).scalar_one_or_none()
+    if hotel is None:
+        raise APIError(404, "not_found", "Hotel not found")
+    hotel.status = payload.status
+    owner_name = (
+        await db.execute(select(User.first_name).where(User.id == hotel.owner_user_id))
+    ).scalar_one()
+    await db.commit()
+    await db.refresh(hotel)
+    return AdminHotelView(
+        id=hotel.id,
+        owner_user_id=hotel.owner_user_id,
+        owner_first_name=owner_name,
+        name_ru=hotel.name_ru,
+        city=hotel.city,
+        status=hotel.status,
+        created_at=hotel.created_at,
+        updated_at=hotel.updated_at,
+    )
+
+
+# ─── Bookings ──────────────────────────────────────────────────────────────
+
+@router.post("/bookings/{code}/cancel", response_model=AdminBookingView)
+async def cancel_booking(
+    code: str,
+    ctx: AuthContext = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+):
+    booking = (
+        await db.execute(select(Booking).where(Booking.code == code).with_for_update())
+    ).scalar_one_or_none()
+    if booking is None:
+        raise APIError(404, "not_found", "Booking not found")
+    if booking.status in (BookingStatus.cancelled, BookingStatus.refunded):
+        raise APIError(409, "conflict", f"Booking already {booking.status.value}")
+
+    # Free availability rows that we booked: rows with status=booked in range.
+    avail_rows = (
+        (
+            await db.execute(
+                select(Availability)
+                .where(
+                    Availability.room_id == booking.room_id,
+                    Availability.date >= booking.check_in,
+                    Availability.date < booking.check_out,
+                    Availability.status == AvailabilityStatus.booked,
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for a in avail_rows:
+        if a.price_override is None:
+            await db.execute(
+                delete(Availability).where(
+                    Availability.room_id == a.room_id, Availability.date == a.date
+                )
+            )
+        else:
+            a.status = AvailabilityStatus.free
+
+    # If there are paid payments, this would warrant a refund — we just flip the
+    # booking status; payments table is not auto-touched (admin handles refund
+    # via payment provider separately).
+    booking.status = BookingStatus.cancelled
+    await db.commit()
+
+    room_hotel = (
+        await db.execute(
+            select(Room, Hotel, User)
+            .join(Hotel, Hotel.id == Room.hotel_id)
+            .join(User, User.id == booking.user_id)
+            .where(Room.id == booking.room_id)
+        )
+    ).first()
+    _, hotel, user = room_hotel
+    return AdminBookingView(
+        id=booking.id,
+        code=booking.code,
+        user_id=booking.user_id,
+        user_first_name=user.first_name,
+        room_id=booking.room_id,
+        hotel_id=hotel.id,
+        hotel_name_ru=hotel.name_ru,
+        check_in=booking.check_in,
+        check_out=booking.check_out,
+        guests=booking.guests,
+        total_kgs=booking.total_kgs,
+        status=booking.status,
+        created_at=booking.created_at,
+    )
+
+
+# ─── Metrics ───────────────────────────────────────────────────────────────
+
+@router.get("/metrics", response_model=MetricsView)
+async def metrics(
+    ctx: AuthContext = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+):
+    users_total = (await db.execute(select(func.count(User.id)))).scalar_one()
+    users_by_role_rows = (
+        await db.execute(select(User.role, func.count(User.id)).group_by(User.role))
+    ).all()
+    users_by_role = {r.value: c for r, c in users_by_role_rows}
+
+    verified_partners = (
+        await db.execute(
+            select(func.count(PartnerProfile.user_id)).where(
+                PartnerProfile.verified_at.is_not(None)
+            )
+        )
+    ).scalar_one()
+
+    hotels_total = (await db.execute(select(func.count(Hotel.id)))).scalar_one()
+    hotels_by_status_rows = (
+        await db.execute(select(Hotel.status, func.count(Hotel.id)).group_by(Hotel.status))
+    ).all()
+    hotels_by_status = {s.value: c for s, c in hotels_by_status_rows}
+
+    rooms_total = (await db.execute(select(func.count(Room.id)))).scalar_one()
+
+    bookings_total = (await db.execute(select(func.count(Booking.id)))).scalar_one()
+    bookings_by_status_rows = (
+        await db.execute(
+            select(Booking.status, func.count(Booking.id)).group_by(Booking.status)
+        )
+    ).all()
+    bookings_by_status = {s.value: c for s, c in bookings_by_status_rows}
+
+    revenue = (
+        await db.execute(
+            select(func.coalesce(func.sum(Payment.amount_kgs), 0)).where(
+                Payment.status == PaymentStatus.paid
+            )
+        )
+    ).scalar_one()
+
+    return MetricsView(
+        users_total=users_total,
+        users_by_role=users_by_role,
+        verified_partners=verified_partners,
+        hotels_total=hotels_total,
+        hotels_by_status=hotels_by_status,
+        rooms_total=rooms_total,
+        bookings_total=bookings_total,
+        bookings_by_status=bookings_by_status,
+        revenue_kgs_paid=int(revenue or 0),
+    )

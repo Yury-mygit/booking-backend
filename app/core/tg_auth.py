@@ -33,7 +33,7 @@ def _verify_with_token(init_data: str, bot_token: str) -> dict | None:
 
 
 def verify_init_data(init_data: str) -> tuple[UserRole, dict]:
-    """Verify against client/partner bot tokens, return (role, telegram_user dict).
+    """Verify against client/partner/admin bot tokens, return (role, telegram_user dict).
 
     Raises InitDataError on any failure.
     """
@@ -42,6 +42,8 @@ def verify_init_data(init_data: str) -> tuple[UserRole, dict]:
         candidates.append((UserRole.client, settings.tg_bot_token_client))
     if settings.tg_bot_token_partner:
         candidates.append((UserRole.partner, settings.tg_bot_token_partner))
+    if settings.tg_bot_token_admin:
+        candidates.append((UserRole.admin, settings.tg_bot_token_admin))
 
     matched: tuple[UserRole, dict] | None = None
     for role, token in candidates:

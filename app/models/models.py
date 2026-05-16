@@ -25,6 +25,7 @@ class Base(DeclarativeBase):
 class UserRole(str, enum.Enum):
     client = "client"
     partner = "partner"
+    admin = "admin"
 
 
 class Lang(str, enum.Enum):

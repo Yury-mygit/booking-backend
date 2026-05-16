@@ -10,7 +10,7 @@ from app.core.database import get_db
 from app.core.deps import AuthContext, current_user
 from app.core.exceptions import APIError
 from app.core.tg_auth import InitDataError, verify_init_data
-from app.models.models import Lang, Session, User
+from app.models.models import Lang, Session, User, UserRole
 from app.schemas.auth import AuthTgRequest, AuthTgResponse, AuthTgUser
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -39,6 +39,18 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
     existing = await db.execute(select(User).where(User.telegram_id == telegram_id))
     user = existing.scalar_one_or_none()
     is_new = False
+
+    # Admin gate: opening the admin bot does NOT grant admin role on its own.
+    # The user must be pre-assigned `users.role = admin` (via promote_to_admin
+    # CLI or another admin's API call). Otherwise refuse — without this anyone
+    # who knows the admin bot username could obtain an admin session.
+    if role == UserRole.admin and (user is None or user.role != UserRole.admin):
+        raise APIError(
+            403,
+            "forbidden",
+            "Admin access requires pre-assigned admin role",
+        )
+
     if user is None:
         user = User(
             telegram_id=telegram_id,

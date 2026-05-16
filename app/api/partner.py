@@ -14,6 +14,7 @@ from app.models.models import (
     Booking,
     BookingStatus,
     Hotel,
+    HotelService,
     Room,
     User,
     UserRole,
@@ -28,6 +29,9 @@ from app.schemas.partner import (
     RoomCreate,
     RoomPartnerView,
     RoomUpdate,
+    ServiceCreate,
+    ServicePartnerView,
+    ServiceUpdate,
 )
 
 router = APIRouter(prefix="/p", tags=["partner"])
@@ -417,6 +421,100 @@ async def update_availability(
         AvailabilityRowOut(date=a.date, status=a.status, price_override=a.price_override)
         for a in rows
     ]
+
+
+# ─── Services ──────────────────────────────────────────────────────────────
+
+def _to_service_view(s: HotelService) -> ServicePartnerView:
+    return ServicePartnerView(
+        id=s.id,
+        hotel_id=s.hotel_id,
+        name_ru=s.name_ru,
+        name_ky=s.name_ky,
+        name_en=s.name_en,
+        price_kgs=s.price_kgs,
+        created_at=s.created_at,
+    )
+
+
+async def _get_my_service(
+    db: AsyncSession, ctx: AuthContext, hotel_id: int, service_id: int
+) -> HotelService:
+    await _get_my_hotel(db, ctx, hotel_id)
+    s = (
+        await db.execute(
+            select(HotelService).where(
+                HotelService.id == service_id, HotelService.hotel_id == hotel_id
+            )
+        )
+    ).scalar_one_or_none()
+    if s is None:
+        raise APIError(404, "not_found", "Service not found")
+    return s
+
+
+@router.get("/hotels/{hotel_id}/services", response_model=list[ServicePartnerView])
+async def list_services(
+    hotel_id: int,
+    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    db: AsyncSession = Depends(get_db),
+):
+    await _get_my_hotel(db, ctx, hotel_id)
+    rows = (
+        (
+            await db.execute(
+                select(HotelService).where(HotelService.hotel_id == hotel_id).order_by(HotelService.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [_to_service_view(s) for s in rows]
+
+
+@router.post("/hotels/{hotel_id}/services", response_model=ServicePartnerView, status_code=201)
+async def create_service(
+    hotel_id: int,
+    payload: ServiceCreate,
+    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    db: AsyncSession = Depends(get_db),
+):
+    await _get_my_hotel(db, ctx, hotel_id)
+    s = HotelService(hotel_id=hotel_id, **payload.model_dump())
+    db.add(s)
+    await db.commit()
+    await db.refresh(s)
+    return _to_service_view(s)
+
+
+@router.put("/hotels/{hotel_id}/services/{service_id}", response_model=ServicePartnerView)
+async def update_service(
+    hotel_id: int,
+    service_id: int,
+    payload: ServiceUpdate,
+    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    db: AsyncSession = Depends(get_db),
+):
+    s = await _get_my_service(db, ctx, hotel_id, service_id)
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(s, field, value)
+    await db.commit()
+    await db.refresh(s)
+    return _to_service_view(s)
+
+
+@router.delete("/hotels/{hotel_id}/services/{service_id}", status_code=204)
+async def delete_service(
+    hotel_id: int,
+    service_id: int,
+    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    db: AsyncSession = Depends(get_db),
+):
+    s = await _get_my_service(db, ctx, hotel_id, service_id)
+    await db.delete(s)
+    await db.commit()
+    return None
 
 
 # ─── Incoming bookings ─────────────────────────────────────────────────────

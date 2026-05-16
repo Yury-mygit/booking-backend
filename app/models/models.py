@@ -153,6 +153,22 @@ class Room(Base):
     )
 
 
+class HotelService(Base):
+    __tablename__ = "hotel_services"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hotel_id: Mapped[int] = mapped_column(
+        ForeignKey("hotels.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name_ru: Mapped[str] = mapped_column(String(256), nullable=False)
+    name_ky: Mapped[str | None] = mapped_column(String(256))
+    name_en: Mapped[str | None] = mapped_column(String(256))
+    price_kgs: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class Availability(Base):
     __tablename__ = "availability"
 

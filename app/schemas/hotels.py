@@ -29,6 +29,14 @@ class RoomCard(BaseModel):
     total_kgs_for_dates: int | None = None
 
 
+class ServicePublicView(BaseModel):
+    id: int
+    name_ru: str
+    name_ky: str | None
+    name_en: str | None
+    price_kgs: int | None
+
+
 class HotelDetails(BaseModel):
     id: int
     name_ru: str
@@ -43,6 +51,7 @@ class HotelDetails(BaseModel):
     lng: float | None
     photos: list[str]
     rooms: list[RoomCard]
+    services: list[ServicePublicView]
 
 
 class HotelSearchQuery(BaseModel):

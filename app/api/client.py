@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -147,21 +147,19 @@ async def create_booking(
 
 @router.get("/bookings", response_model=list[BookingResponse])
 async def list_my_bookings(
+    hotel_id: int | None = Query(default=None),
     ctx: AuthContext = Depends(require_role(UserRole.client)),
     db: AsyncSession = Depends(get_db),
 ) -> list[BookingResponse]:
-    rows = (
-        (
-            await db.execute(
-                select(Booking)
-                .where(Booking.user_id == ctx.user.id)
-                .order_by(Booking.created_at.desc())
-                .limit(100)
-            )
-        )
-        .scalars()
-        .all()
+    stmt = (
+        select(Booking)
+        .where(Booking.user_id == ctx.user.id)
+        .order_by(Booking.created_at.desc())
+        .limit(100)
     )
+    if hotel_id is not None:
+        stmt = stmt.join(Room, Room.id == Booking.room_id).where(Room.hotel_id == hotel_id)
+    rows = (await db.execute(stmt)).scalars().all()
     return [await _build_response(db, b) for b in rows]
 
 

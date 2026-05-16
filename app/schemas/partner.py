@@ -107,6 +107,30 @@ class AvailabilityRowOut(BaseModel):
     price_override: int | None
 
 
+class ServiceCreate(BaseModel):
+    name_ru: str = Field(min_length=1, max_length=256)
+    name_ky: str | None = None
+    name_en: str | None = None
+    price_kgs: int | None = Field(default=None, ge=0)
+
+
+class ServiceUpdate(BaseModel):
+    name_ru: str | None = None
+    name_ky: str | None = None
+    name_en: str | None = None
+    price_kgs: int | None = Field(default=None, ge=0)
+
+
+class ServicePartnerView(BaseModel):
+    id: int
+    hotel_id: int
+    name_ru: str
+    name_ky: str | None
+    name_en: str | None
+    price_kgs: int | None
+    created_at: datetime
+
+
 class PartnerBookingView(BaseModel):
     id: int
     code: str

@@ -10,10 +10,11 @@ from app.models.models import (
     Availability,
     AvailabilityStatus,
     Hotel,
+    HotelService,
     HotelStatus,
     Room,
 )
-from app.schemas.hotels import HotelDetails, HotelListItem, RoomCard
+from app.schemas.hotels import HotelDetails, HotelListItem, RoomCard, ServicePublicView
 from app.utils import date_range_nights
 
 router = APIRouter(prefix="/public", tags=["public"])
@@ -159,6 +160,26 @@ async def hotel_details(
             )
         )
 
+    services_rows = (
+        (
+            await db.execute(
+                select(HotelService).where(HotelService.hotel_id == hotel_id).order_by(HotelService.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    services = [
+        ServicePublicView(
+            id=s.id,
+            name_ru=s.name_ru,
+            name_ky=s.name_ky,
+            name_en=s.name_en,
+            price_kgs=s.price_kgs,
+        )
+        for s in services_rows
+    ]
+
     return HotelDetails(
         id=hotel.id,
         name_ru=hotel.name_ru,
@@ -173,4 +194,5 @@ async def hotel_details(
         lng=float(hotel.lng) if hotel.lng is not None else None,
         photos=hotel.photos or [],
         rooms=cards,
+        services=services,
     )

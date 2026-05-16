@@ -25,6 +25,7 @@ class RoomCard(BaseModel):
     description_en: str | None
     capacity: int
     price_kgs: int
+    floor: int | None
     photos: list[str]
     available_for_dates: bool | None = None
     total_kgs_for_dates: int | None = None

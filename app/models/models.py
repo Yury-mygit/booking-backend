@@ -146,6 +146,7 @@ class Room(Base):
     description_en: Mapped[str | None] = mapped_column(Text)
     capacity: Mapped[int] = mapped_column(Integer, nullable=False)
     price_kgs: Mapped[int] = mapped_column(Integer, nullable=False)
+    floor: Mapped[int | None] = mapped_column(Integer)
     photos: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )

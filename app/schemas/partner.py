@@ -62,6 +62,7 @@ class RoomCreate(BaseModel):
     description_en: str | None = None
     capacity: int = Field(ge=1, le=20)
     price_kgs: int = Field(ge=0)
+    floor: int | None = None
     photos: list[str] = Field(default_factory=list)
 
 
@@ -74,6 +75,7 @@ class RoomUpdate(BaseModel):
     description_en: str | None = None
     capacity: int | None = Field(default=None, ge=1, le=20)
     price_kgs: int | None = Field(default=None, ge=0)
+    floor: int | None = None
     photos: list[str] | None = None
 
 
@@ -88,6 +90,7 @@ class RoomPartnerView(BaseModel):
     description_en: str | None
     capacity: int
     price_kgs: int
+    floor: int | None
     photos: list[str]
     created_at: datetime
 

@@ -57,6 +57,29 @@ async def _get_my_hotel_or_404(db: AsyncSession, ctx: AuthContext, hotel_id: int
     return h
 
 
+async def _get_my_room_or_404(db: AsyncSession, ctx: AuthContext, room_id: int):
+    from app.models.models import Hotel, Room
+    from sqlalchemy import select
+    row = (
+        await db.execute(
+            select(Room, Hotel)
+            .join(Hotel, Hotel.id == Room.hotel_id)
+            .where(Room.id == room_id, Hotel.owner_user_id == ctx.user.id)
+        )
+    ).first()
+    if row is None:
+        raise APIError(404, "not_found", "Room not found")
+    return row[0]
+
+
+def _safe_room_dir(room_id: int) -> Path:
+    return Path(settings.storage_path) / "rooms" / str(room_id)
+
+
+def _room_url(room_id: int, filename: str) -> str:
+    return f"/api/v1/photos/rooms/{room_id}/{filename}"
+
+
 @router.post("/p/hotels/{hotel_id}/photos")
 async def upload_photo(
     hotel_id: int,
@@ -148,6 +171,99 @@ async def serve_photo(hotel_id: int, filename: str):
     if "/" in filename or "\\" in filename or ".." in filename:
         raise APIError(400, "bad_request", "Invalid filename")
     p = _safe_hotel_dir(hotel_id) / filename
+    if not p.exists() or not p.is_file():
+        raise APIError(404, "not_found", "Photo not found")
+    return FileResponse(p)
+
+
+# ─── Room photos ───────────────────────────────────────────────────────────
+
+@router.post("/p/rooms/{room_id}/photos")
+async def upload_room_photo(
+    room_id: int,
+    file: UploadFile = File(...),
+    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    db: AsyncSession = Depends(get_db),
+):
+    r = await _get_my_room_or_404(db, ctx, room_id)
+
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in ALLOWED_EXT:
+        raise APIError(400, "bad_format", "Allowed: jpg, jpeg, png, webp")
+
+    data = await file.read()
+    if len(data) == 0:
+        raise APIError(400, "empty", "Empty file")
+    if len(data) > settings.photo_max_bytes:
+        raise APIError(400, "too_large", f"Max {settings.photo_max_bytes} bytes")
+    if not any(data.startswith(m) for m in _MAGIC):
+        raise APIError(400, "bad_format", "Not a valid image")
+
+    dst_dir = _safe_room_dir(room_id)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    fname = secrets.token_urlsafe(12) + ext
+    (dst_dir / fname).write_bytes(data)
+
+    url = _room_url(room_id, fname)
+    photos = list(r.photos or [])
+    photos.append(url)
+    r.photos = photos
+    await db.commit()
+    await db.refresh(r)
+    return {"url": url, "photos": r.photos}
+
+
+@router.delete("/p/rooms/{room_id}/photos", status_code=204)
+async def delete_room_photo(
+    room_id: int,
+    url: str = Query(...),
+    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    db: AsyncSession = Depends(get_db),
+):
+    r = await _get_my_room_or_404(db, ctx, room_id)
+    photos = list(r.photos or [])
+    if url not in photos:
+        raise APIError(404, "not_found", "Photo not in room")
+    photos.remove(url)
+    r.photos = photos
+    await db.commit()
+
+    prefix = f"/api/v1/photos/rooms/{room_id}/"
+    if url.startswith(prefix):
+        fname = url[len(prefix):]
+        if "/" not in fname and ".." not in fname:
+            p = _safe_room_dir(room_id) / fname
+            if p.exists():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+    return None
+
+
+@router.put("/p/rooms/{room_id}/photos/reorder")
+async def reorder_room_photos(
+    room_id: int,
+    payload: PhotosReorder,
+    ctx: AuthContext = Depends(require_role(UserRole.partner)),
+    db: AsyncSession = Depends(get_db),
+):
+    r = await _get_my_room_or_404(db, ctx, room_id)
+    current = set(r.photos or [])
+    new = set(payload.urls)
+    if current != new:
+        raise APIError(400, "bad_request", "Reorder must contain exactly the same URLs")
+    r.photos = list(payload.urls)
+    await db.commit()
+    await db.refresh(r)
+    return {"photos": r.photos}
+
+
+@router.get("/photos/rooms/{room_id}/{filename}")
+async def serve_room_photo(room_id: int, filename: str):
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise APIError(400, "bad_request", "Invalid filename")
+    p = _safe_room_dir(room_id) / filename
     if not p.exists() or not p.is_file():
         raise APIError(404, "not_found", "Photo not found")
     return FileResponse(p)

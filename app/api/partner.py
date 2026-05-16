@@ -97,6 +97,7 @@ def _to_room_view(r: Room) -> RoomPartnerView:
         capacity=r.capacity,
         price_kgs=r.price_kgs,
         floor=r.floor,
+        beds=r.beds,
         photos=r.photos or [],
         created_at=r.created_at,
     )

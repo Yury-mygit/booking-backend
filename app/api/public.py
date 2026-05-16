@@ -156,6 +156,7 @@ async def hotel_details(
                 capacity=r.capacity,
                 price_kgs=r.price_kgs,
                 floor=r.floor,
+                beds=r.beds,
                 photos=r.photos or [],
                 available_for_dates=available,
                 total_kgs_for_dates=total,

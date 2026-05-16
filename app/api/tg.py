@@ -24,7 +24,13 @@ _ROLE_CONFIG = {
 
 
 def _build_target_url(base_url: str, start_param: str) -> str:
-    """Map /start param into the right WebApp URL with hash routing."""
+    """Map /start param into the right WebApp URL.
+
+    NB: query string, not hash. On Telegram mobile the WebApp container
+    overwrites `location.hash` with its own `tgWebAppData=...`, so a hash like
+    `#/hotel/5` would be lost. The frontend reads `location.search` on bootstrap
+    and redirects into the right hash-route itself.
+    """
     if not start_param:
         return base_url
     m = re.match(
@@ -34,9 +40,10 @@ def _build_target_url(base_url: str, start_param: str) -> str:
     if not m:
         return base_url
     hid, ci, co, g = m.groups()
-    qs = f"?check_in={ci}&check_out={co}&guests={g}" if ci else ""
-    # base_url already ends with "/"; hash starts with "#"
-    return f"{base_url}#/hotel/{hid}{qs}"
+    url = f"{base_url}?hotel={hid}"
+    if ci:
+        url += f"&check_in={ci}&check_out={co}&guests={g}"
+    return url
 
 
 @router.post("/{role}")

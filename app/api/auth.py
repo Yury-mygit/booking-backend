@@ -102,3 +102,53 @@ async def whoami(ctx: AuthContext = Depends(current_user)):
         "first_name": ctx.user.first_name,
         "session_expires_at": ctx.session.expires_at.isoformat(),
     }
+
+
+@router.post("/dev-login", response_model=AuthTgResponse)
+async def dev_login(
+    telegram_id: int,
+    first_name: str = "DevUser",
+    role: UserRole = UserRole.client,
+    db: AsyncSession = Depends(get_db),
+) -> AuthTgResponse:
+    """Bypass Telegram initData — only enabled when DEV_MODE=true.
+
+    Use only in dev environment (vite dev-server, local browser without TG client).
+    """
+    if not settings.dev_mode:
+        raise APIError(404, "not_found", "Dev login disabled")
+
+    existing = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    user = existing.scalar_one_or_none()
+    is_new = False
+    if role == UserRole.admin and (user is None or user.role != UserRole.admin):
+        raise APIError(403, "forbidden", "Admin access requires pre-assigned admin role")
+    if user is None:
+        user = User(telegram_id=telegram_id, role=role, lang=Lang.ru, first_name=first_name)
+        db.add(user)
+        await db.flush()
+        is_new = True
+
+    now = datetime.now(timezone.utc)
+    token = secrets.token_urlsafe(32)
+    session = Session(
+        token=token,
+        user_id=user.id,
+        role=role,
+        expires_at=now + timedelta(seconds=settings.session_ttl_sec),
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(user)
+    return AuthTgResponse(
+        token=token,
+        expires_at=session.expires_at,
+        user=AuthTgUser(
+            id=user.id,
+            telegram_id=user.telegram_id,
+            role=role,
+            lang=user.lang,
+            first_name=user.first_name,
+            is_new=is_new,
+        ),
+    )

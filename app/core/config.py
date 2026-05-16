@@ -17,5 +17,7 @@ class Settings(BaseSettings):
     tg_init_data_max_age_sec: int = 3600
     session_ttl_sec: int = 60 * 60 * 24 * 30
 
+    dev_mode: bool = False
+
 
 settings = Settings()

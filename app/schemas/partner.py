@@ -34,6 +34,34 @@ class HotelUpdate(BaseModel):
     status: HotelStatus | None = None
 
 
+class ChecklistAction(BaseModel):
+    tab: str | None = None
+    nav: str | None = None  # "rooms" → /hotel/{id}/rooms
+    room_id: int | None = None  # navigate to /room/{hotel_id}/{room_id}
+
+
+class ChecklistItem(BaseModel):
+    key: str  # i18n key, e.g. "status.check.hotel_photos"
+    params: dict[str, int] = Field(default_factory=dict)
+    kind: str  # "required" | "recommended"
+    ok: bool
+    action: ChecklistAction | None = None
+
+
+class HotelStats(BaseModel):
+    bookings_total: int
+    bookings_active: int  # status in (pending, paid) and check_out >= today
+    checkins_next_7d: int
+    revenue_kgs_30d: int  # sum total_kgs for paid bookings created in last 30d
+    last_booking_at: datetime | None
+
+
+class HotelDashboard(BaseModel):
+    can_publish: bool
+    checks: list[ChecklistItem]
+    stats: HotelStats
+
+
 class HotelPartnerView(BaseModel):
     id: int
     slug: str
@@ -49,6 +77,7 @@ class HotelPartnerView(BaseModel):
     lng: float | None
     photos: list[str]
     status: HotelStatus
+    published_at: datetime | None
     created_at: datetime
     updated_at: datetime
 

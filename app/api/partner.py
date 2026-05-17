@@ -1,7 +1,7 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, delete, exists, select
+from sqlalchemy import and_, case, delete, exists, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,7 @@ from app.models.models import (
     Client,
     Hotel,
     HotelService,
+    HotelStatus,
     Room,
     User,
     UserRole,
@@ -27,8 +28,12 @@ from app.schemas.partner import (
     ClientLookup,
     ClientPartnerView,
     ClientUpdate,
+    ChecklistAction,
+    ChecklistItem,
     HotelCreate,
+    HotelDashboard,
     HotelPartnerView,
+    HotelStats,
     HotelUpdate,
     PartnerBookingView,
     RoomCreate,
@@ -92,6 +97,7 @@ def _to_hotel_view(h: Hotel) -> HotelPartnerView:
         lng=float(h.lng) if h.lng is not None else None,
         photos=h.photos or [],
         status=h.status,
+        published_at=h.published_at,
         created_at=h.created_at,
         updated_at=h.updated_at,
     )
@@ -175,6 +181,173 @@ async def get_my_hotel(
     return _to_hotel_view(await _get_my_hotel(db, ctx, hotel_id))
 
 
+@router.get("/hotels/{hotel_id}/dashboard", response_model=HotelDashboard)
+async def get_hotel_dashboard(
+    hotel_id: int,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    h = await _get_my_hotel(db, ctx, hotel_id)
+    rooms = (
+        (
+            await db.execute(
+                select(Room).where(Room.hotel_id == hotel_id).order_by(Room.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    checks = _build_checklist(h, rooms)
+    required_fails = sum(1 for c in checks if c.kind == "required" and not c.ok)
+    stats = await _compute_hotel_stats(db, hotel_id)
+    return HotelDashboard(
+        can_publish=required_fails == 0,
+        checks=checks,
+        stats=stats,
+    )
+
+
+def _build_checklist(h: Hotel, rooms: list[Room]) -> list[ChecklistItem]:
+    photo_count = len(h.photos or [])
+    no_price_rooms = [r for r in rooms if not r.price_kgs or r.price_kgs <= 0]
+    no_photo_rooms = [r for r in rooms if not (r.photos or [])]
+    has_desc = any(
+        (d or "").strip().__len__() >= 20
+        for d in (h.description_ru, h.description_ky, h.description_en)
+    )
+
+    out: list[ChecklistItem] = []
+    out.append(ChecklistItem(
+        kind="required",
+        ok=photo_count > 0,
+        key="status.check.hotel_photos",
+        action=None if photo_count > 0 else ChecklistAction(tab="photos"),
+    ))
+    out.append(ChecklistItem(
+        kind="required",
+        ok=len(rooms) > 0,
+        key="status.check.has_rooms",
+        action=None if rooms else ChecklistAction(nav="rooms"),
+    ))
+    if no_price_rooms:
+        out.append(ChecklistItem(
+            kind="required",
+            ok=False,
+            key="status.check.rooms_price_missing",
+            params={"n": len(no_price_rooms)},
+            action=ChecklistAction(room_id=no_price_rooms[0].id),
+        ))
+    else:
+        out.append(ChecklistItem(
+            kind="required",
+            ok=len(rooms) > 0,
+            key="status.check.rooms_price_ok",
+        ))
+
+    out.append(ChecklistItem(
+        kind="recommended",
+        ok=has_desc,
+        key="status.check.description",
+        action=None if has_desc else ChecklistAction(tab="description"),
+    ))
+    out.append(ChecklistItem(
+        kind="recommended",
+        ok=bool(h.address and h.address.strip()),
+        key="status.check.address",
+        action=None if (h.address and h.address.strip()) else ChecklistAction(tab="description"),
+    ))
+    out.append(ChecklistItem(
+        kind="recommended",
+        ok=h.lat is not None and h.lng is not None,
+        key="status.check.coords",
+        action=None if (h.lat is not None and h.lng is not None) else ChecklistAction(tab="description"),
+    ))
+    out.append(ChecklistItem(
+        kind="recommended",
+        ok=bool(h.name_ky and h.name_en),
+        key="status.check.name_translations",
+        action=None if (h.name_ky and h.name_en) else ChecklistAction(tab="description"),
+    ))
+    if rooms:
+        if no_photo_rooms:
+            out.append(ChecklistItem(
+                kind="recommended",
+                ok=False,
+                key="status.check.rooms_no_photos",
+                params={"n": len(no_photo_rooms)},
+                action=ChecklistAction(room_id=no_photo_rooms[0].id),
+            ))
+        else:
+            out.append(ChecklistItem(
+                kind="recommended",
+                ok=True,
+                key="status.check.rooms_photos_ok",
+            ))
+
+    return out
+
+
+async def _compute_hotel_stats(db: AsyncSession, hotel_id: int) -> HotelStats:
+    today = date.today()
+    in_7d = today + timedelta(days=7)
+    since_30d = datetime.now(timezone.utc) - timedelta(days=30)
+
+    room_ids_subq = select(Room.id).where(Room.hotel_id == hotel_id).scalar_subquery()
+
+    is_active = case(
+        (
+            and_(
+                Booking.status.in_([BookingStatus.pending, BookingStatus.paid]),
+                Booking.check_out >= today,
+            ),
+            1,
+        ),
+        else_=0,
+    )
+    is_checkin_7d = case(
+        (
+            and_(
+                Booking.status.not_in([BookingStatus.cancelled, BookingStatus.refunded]),
+                Booking.check_in >= today,
+                Booking.check_in <= in_7d,
+            ),
+            1,
+        ),
+        else_=0,
+    )
+    revenue_expr = case(
+        (
+            and_(
+                Booking.status == BookingStatus.paid,
+                Booking.created_at >= since_30d,
+            ),
+            Booking.total_kgs,
+        ),
+        else_=0,
+    )
+
+    row = (
+        await db.execute(
+            select(
+                func.count(Booking.id).label("total"),
+                func.coalesce(func.sum(is_active), 0).label("active"),
+                func.coalesce(func.sum(is_checkin_7d), 0).label("checkins7d"),
+                func.coalesce(func.sum(revenue_expr), 0).label("revenue30d"),
+                func.max(Booking.created_at).label("last_at"),
+            ).where(Booking.room_id.in_(room_ids_subq))
+        )
+    ).one()
+
+    return HotelStats(
+        bookings_total=row.total or 0,
+        bookings_active=int(row.active or 0),
+        checkins_next_7d=int(row.checkins7d or 0),
+        revenue_kgs_30d=int(row.revenue30d or 0),
+        last_booking_at=row.last_at,
+    )
+
+
 @router.put("/hotels/{hotel_id}", response_model=HotelPartnerView)
 async def update_hotel(
     hotel_id: int,
@@ -185,10 +358,18 @@ async def update_hotel(
     h = await _get_my_hotel(db, ctx, hotel_id)
     data = payload.model_dump(exclude_unset=True)
     name_en_changed = "name_en" in data and data["name_en"] != h.name_en
+    new_status = data.get("status")
+    becomes_published = (
+        "status" in data
+        and new_status == HotelStatus.published
+        and h.status != HotelStatus.published
+    )
     for field, value in data.items():
         setattr(h, field, value)
     if name_en_changed:
         h.slug = await gen_unique_hotel_slug(db, h.name_en, h.id, exclude_id=h.id)
+    if becomes_published:
+        h.published_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(h)
     return _to_hotel_view(h)
@@ -556,6 +737,8 @@ async def delete_service(
 @router.get("/bookings", response_model=list[PartnerBookingView])
 async def list_incoming_bookings(
     status_filter: BookingStatus | None = Query(default=None, alias="status"),
+    hotel_id: int | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
@@ -566,10 +749,12 @@ async def list_incoming_bookings(
         .join(Client, Client.id == Booking.client_id)
         .where(Hotel.owner_user_id == ctx.user.id)
         .order_by(Booking.created_at.desc())
-        .limit(200)
+        .limit(limit)
     )
     if status_filter is not None:
         stmt = stmt.where(Booking.status == status_filter)
+    if hotel_id is not None:
+        stmt = stmt.where(Hotel.id == hotel_id)
 
     rows = (await db.execute(stmt)).all()
     return [

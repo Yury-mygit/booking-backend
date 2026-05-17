@@ -5,6 +5,7 @@ from sqlalchemy import and_, delete, exists, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import pubsub
 from app.core.database import get_db
 from app.core.deps import AuthContext, require_verified_partner
 from app.core.exceptions import APIError
@@ -637,8 +638,10 @@ async def confirm_booking(
     if b.status != BookingStatus.pending:
         raise APIError(409, "conflict", f"Booking is {b.status.value}, only pending can be confirmed")
     b.status = BookingStatus.paid
+    hotel_id_for_pub = h.id
     await db.commit()
     await db.refresh(b)
+    await pubsub.publish_refresh(hotel_id_for_pub)
     return _to_partner_booking(b, r, h, c)
 
 
@@ -679,8 +682,10 @@ async def cancel_booking(
             a.status = AvailabilityStatus.free
 
     b.status = BookingStatus.cancelled
+    hotel_id_for_pub = h.id
     await db.commit()
     await db.refresh(b)
+    await pubsub.publish_refresh(hotel_id_for_pub)
     return _to_partner_booking(b, r, h, c)
 
 
@@ -801,8 +806,10 @@ async def create_walkin_booking(
         status=BookingStatus.pending,
     )
     db.add(booking)
+    hotel_id_for_pub = hotel.id
     await db.commit()
     await db.refresh(booking)
+    await pubsub.publish_refresh(hotel_id_for_pub)
     return _to_partner_booking(booking, room, hotel, client)
 
 

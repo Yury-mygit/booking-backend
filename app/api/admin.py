@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import pubsub
 from app.core.database import get_db
 from app.core.deps import AuthContext, require_role
 from app.core.exceptions import APIError
@@ -319,7 +320,11 @@ async def cancel_booking(
     # booking status; payments table is not auto-touched (admin handles refund
     # via payment provider separately).
     booking.status = BookingStatus.cancelled
+    hotel_id_for_pub = (
+        await db.execute(select(Room.hotel_id).where(Room.id == booking.room_id))
+    ).scalar_one()
     await db.commit()
+    await pubsub.publish_refresh(hotel_id_for_pub)
 
     row = (
         await db.execute(

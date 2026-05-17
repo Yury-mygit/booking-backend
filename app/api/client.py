@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import pubsub
 from app.core.database import get_db
 from app.core.deps import AuthContext, require_role
 from app.core.exceptions import APIError
@@ -142,8 +143,10 @@ async def create_booking(
         status=BookingStatus.pending,
     )
     db.add(booking)
+    hotel_id_for_pub = room.hotel_id  # capture before commit (avoid expired attrs).
     await db.commit()
     await db.refresh(booking)
+    await pubsub.publish_refresh(hotel_id_for_pub)
     return await _build_response(db, booking)
 
 

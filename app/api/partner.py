@@ -9,7 +9,9 @@ from app.core import pubsub
 from app.core.database import get_db
 from app.core.deps import AuthContext, require_verified_partner
 from app.core.exceptions import APIError
+from app.core.audit import audit
 from app.models.models import (
+    AuditLog,
     Availability,
     AvailabilityStatus,
     Booking,
@@ -18,11 +20,13 @@ from app.models.models import (
     Hotel,
     HotelService,
     HotelStatus,
+    PartnerStaff,
     Room,
     User,
     UserRole,
 )
 from app.schemas.partner import (
+    AuditEntryView,
     AvailabilityBatchUpdate,
     AvailabilityRowOut,
     ClientLookup,
@@ -35,6 +39,7 @@ from app.schemas.partner import (
     HotelPartnerView,
     HotelStats,
     HotelUpdate,
+    OwnerAccess,
     PartnerBookingView,
     RoomCreate,
     RoomFlatView,
@@ -43,6 +48,10 @@ from app.schemas.partner import (
     ServiceCreate,
     ServicePartnerView,
     ServiceUpdate,
+    StaffCreate,
+    StaffPerms,
+    StaffUpdate,
+    StaffView,
     WalkinBookingCreate,
 )
 from app.utils import (
@@ -56,21 +65,52 @@ from app.utils import (
 router = APIRouter(prefix="/p", tags=["partner"])
 
 
-async def _get_my_hotel(db: AsyncSession, ctx: AuthContext, hotel_id: int) -> Hotel:
+def _scope_owner_ids(ctx: AuthContext, owner_id: int | None) -> list[int]:
+    """Return the owner_user_id set for scope-aware list queries.
+
+    If owner_id is None — all accessible owners.
+    If owner_id is given — must be a member of accessible_owners (else 404).
+    """
+    if owner_id is None:
+        return list(ctx.accessible_owners.keys())
+    if owner_id not in ctx.accessible_owners:
+        raise APIError(404, "not_found", "Owner not accessible")
+    return [owner_id]
+
+
+async def _get_my_hotel(
+    db: AsyncSession,
+    ctx: AuthContext,
+    hotel_id: int,
+    *,
+    require_perm: str | None = None,
+) -> Hotel:
+    accessible_ids = list(ctx.accessible_owners.keys())
     hotel = (
         await db.execute(
-            select(Hotel).where(Hotel.id == hotel_id, Hotel.owner_user_id == ctx.user.id)
+            select(Hotel).where(
+                Hotel.id == hotel_id, Hotel.owner_user_id.in_(accessible_ids)
+            )
         )
     ).scalar_one_or_none()
     if hotel is None:
         raise APIError(404, "not_found", "Hotel not found")
+    if require_perm is not None:
+        access = ctx.accessible_owners[hotel.owner_user_id]
+        if not access.has(require_perm):
+            raise APIError(403, "permission_denied", f"Missing permission: {require_perm}")
     return hotel
 
 
 async def _get_my_room(
-    db: AsyncSession, ctx: AuthContext, hotel_id: int, room_id: int
+    db: AsyncSession,
+    ctx: AuthContext,
+    hotel_id: int,
+    room_id: int,
+    *,
+    require_perm: str | None = None,
 ) -> Room:
-    await _get_my_hotel(db, ctx, hotel_id)
+    await _get_my_hotel(db, ctx, hotel_id, require_perm=require_perm)
     room = (
         await db.execute(
             select(Room).where(Room.id == room_id, Room.hotel_id == hotel_id)
@@ -126,14 +166,16 @@ def _to_room_view(r: Room) -> RoomPartnerView:
 
 @router.get("/hotels", response_model=list[HotelPartnerView])
 async def list_my_hotels(
+    owner_id: int | None = Query(default=None),
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
+    accessible_ids = _scope_owner_ids(ctx, owner_id)
     rows = (
         (
             await db.execute(
                 select(Hotel)
-                .where(Hotel.owner_user_id == ctx.user.id)
+                .where(Hotel.owner_user_id.in_(accessible_ids))
                 .order_by(Hotel.created_at.desc())
             )
         )
@@ -149,6 +191,11 @@ async def create_hotel(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
+    # Only the owner themselves can create hotels — staff cannot create hotels
+    # for the owner. Requires a verified self-entry in accessible_owners.
+    self_access = ctx.accessible_owners.get(ctx.user.id)
+    if self_access is None or not self_access.is_self:
+        raise APIError(403, "permission_denied", "Only the owner can create hotels")
     h = Hotel(
         owner_user_id=ctx.user.id,
         slug="__pending__",  # placeholder; replaced after flush() gives id
@@ -169,6 +216,14 @@ async def create_hotel(
     h.slug = await gen_unique_hotel_slug(db, payload.name_en, h.id, exclude_id=h.id)
     await db.commit()
     await db.refresh(h)
+    await audit(
+        db, ctx,
+        owner_user_id=h.owner_user_id,
+        action="hotel.create",
+        subject_type="hotel",
+        subject_id=h.id,
+        payload={"name_ru": h.name_ru, "city": h.city},
+    )
     return _to_hotel_view(h)
 
 
@@ -355,7 +410,7 @@ async def update_hotel(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    h = await _get_my_hotel(db, ctx, hotel_id)
+    h = await _get_my_hotel(db, ctx, hotel_id, require_perm="manage_hotel")
     data = payload.model_dump(exclude_unset=True)
     name_en_changed = "name_en" in data and data["name_en"] != h.name_en
     new_status = data.get("status")
@@ -372,6 +427,20 @@ async def update_hotel(
         h.published_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(h)
+    if becomes_published:
+        action = "hotel.publish"
+    elif "status" in data and data["status"] != HotelStatus.published:
+        action = "hotel.unpublish"
+    else:
+        action = "hotel.update"
+    await audit(
+        db, ctx,
+        owner_user_id=h.owner_user_id,
+        action=action,
+        subject_type="hotel",
+        subject_id=h.id,
+        payload={"changed_fields": list(data.keys())},
+    )
     return _to_hotel_view(h)
 
 
@@ -381,7 +450,7 @@ async def delete_hotel(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    h = await _get_my_hotel(db, ctx, hotel_id)
+    h = await _get_my_hotel(db, ctx, hotel_id, require_perm="manage_hotel")
     today = date.today()
     has_active = (
         await db.execute(
@@ -402,8 +471,19 @@ async def delete_hotel(
             Booking.room_id.in_(select(Room.id).where(Room.hotel_id == h.id))
         )
     )
+    snapshot = {"name_ru": h.name_ru, "city": h.city}
+    owner_id_snap = h.owner_user_id
+    hotel_id_snap = h.id
     await db.delete(h)
     await db.commit()
+    await audit(
+        db, ctx,
+        owner_user_id=owner_id_snap,
+        action="hotel.delete",
+        subject_type="hotel",
+        subject_id=hotel_id_snap,
+        payload=snapshot,
+    )
     return None
 
 
@@ -435,11 +515,19 @@ async def create_room(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_my_hotel(db, ctx, hotel_id)
+    h = await _get_my_hotel(db, ctx, hotel_id, require_perm="manage_rooms")
     r = Room(hotel_id=hotel_id, **payload.model_dump())
     db.add(r)
     await db.commit()
     await db.refresh(r)
+    await audit(
+        db, ctx,
+        owner_user_id=h.owner_user_id,
+        action="room.create",
+        subject_type="room",
+        subject_id=r.id,
+        payload={"hotel_id": hotel_id, "name_ru": r.name_ru, "capacity": r.capacity, "price_kgs": r.price_kgs},
+    )
     return _to_room_view(r)
 
 
@@ -478,7 +566,7 @@ async def update_room(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    r = await _get_my_room(db, ctx, hotel_id, room_id)
+    r = await _get_my_room(db, ctx, hotel_id, room_id, require_perm="manage_rooms")
     data = payload.model_dump(exclude_unset=True)
     if "capacity" in data and data["capacity"] != r.capacity:
         if await _room_has_active_bookings(db, r.id):
@@ -487,8 +575,19 @@ async def update_room(
             )
     for field, value in data.items():
         setattr(r, field, value)
+    hotel_owner_id = (
+        await db.execute(select(Hotel.owner_user_id).where(Hotel.id == hotel_id))
+    ).scalar_one()
     await db.commit()
     await db.refresh(r)
+    await audit(
+        db, ctx,
+        owner_user_id=hotel_owner_id,
+        action="room.update",
+        subject_type="room",
+        subject_id=r.id,
+        payload={"hotel_id": hotel_id, "changed_fields": list(data.keys())},
+    )
     return _to_room_view(r)
 
 
@@ -499,11 +598,24 @@ async def delete_room(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    r = await _get_my_room(db, ctx, hotel_id, room_id)
+    r = await _get_my_room(db, ctx, hotel_id, room_id, require_perm="manage_rooms")
     if await _room_has_active_bookings(db, r.id):
         raise APIError(409, "conflict", "Room has active bookings")
+    hotel_owner_id = (
+        await db.execute(select(Hotel.owner_user_id).where(Hotel.id == hotel_id))
+    ).scalar_one()
+    snapshot = {"hotel_id": hotel_id, "name_ru": r.name_ru, "capacity": r.capacity}
+    room_id_snap = r.id
     await db.delete(r)
     await db.commit()
+    await audit(
+        db, ctx,
+        owner_user_id=hotel_owner_id,
+        action="room.delete",
+        subject_type="room",
+        subject_id=room_id_snap,
+        payload=snapshot,
+    )
     return None
 
 
@@ -556,7 +668,7 @@ async def update_availability(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_my_room(db, ctx, hotel_id, room_id)
+    await _get_my_room(db, ctx, hotel_id, room_id, require_perm="manage_rooms")
 
     # Reject any attempt to set 'booked' through partner endpoint.
     for n in payload.nights:
@@ -613,7 +725,19 @@ async def update_availability(
             )
         )
         await db.execute(stmt)
+    hotel_owner_id = (
+        await db.execute(select(Hotel.owner_user_id).where(Hotel.id == hotel_id))
+    ).scalar_one()
     await db.commit()
+    if payload.nights:
+        await audit(
+            db, ctx,
+            owner_user_id=hotel_owner_id,
+            action="room.availability_update",
+            subject_type="room",
+            subject_id=room_id,
+            payload={"nights_count": len(payload.nights), "hotel_id": hotel_id},
+        )
 
     if incoming_dates:
         rows = (
@@ -653,9 +777,14 @@ def _to_service_view(s: HotelService) -> ServicePartnerView:
 
 
 async def _get_my_service(
-    db: AsyncSession, ctx: AuthContext, hotel_id: int, service_id: int
+    db: AsyncSession,
+    ctx: AuthContext,
+    hotel_id: int,
+    service_id: int,
+    *,
+    require_perm: str | None = None,
 ) -> HotelService:
-    await _get_my_hotel(db, ctx, hotel_id)
+    await _get_my_hotel(db, ctx, hotel_id, require_perm=require_perm)
     s = (
         await db.execute(
             select(HotelService).where(
@@ -694,11 +823,19 @@ async def create_service(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_my_hotel(db, ctx, hotel_id)
+    h = await _get_my_hotel(db, ctx, hotel_id, require_perm="manage_hotel")
     s = HotelService(hotel_id=hotel_id, **payload.model_dump())
     db.add(s)
     await db.commit()
     await db.refresh(s)
+    await audit(
+        db, ctx,
+        owner_user_id=h.owner_user_id,
+        action="service.create",
+        subject_type="service",
+        subject_id=s.id,
+        payload={"hotel_id": hotel_id, "name_ru": s.name_ru},
+    )
     return _to_service_view(s)
 
 
@@ -710,12 +847,23 @@ async def update_service(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    s = await _get_my_service(db, ctx, hotel_id, service_id)
+    s = await _get_my_service(db, ctx, hotel_id, service_id, require_perm="manage_hotel")
     data = payload.model_dump(exclude_unset=True)
     for field, value in data.items():
         setattr(s, field, value)
+    hotel_owner_id = (
+        await db.execute(select(Hotel.owner_user_id).where(Hotel.id == hotel_id))
+    ).scalar_one()
     await db.commit()
     await db.refresh(s)
+    await audit(
+        db, ctx,
+        owner_user_id=hotel_owner_id,
+        action="service.update",
+        subject_type="service",
+        subject_id=s.id,
+        payload={"hotel_id": hotel_id, "changed_fields": list(data.keys())},
+    )
     return _to_service_view(s)
 
 
@@ -726,9 +874,22 @@ async def delete_service(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    s = await _get_my_service(db, ctx, hotel_id, service_id)
+    s = await _get_my_service(db, ctx, hotel_id, service_id, require_perm="manage_hotel")
+    hotel_owner_id = (
+        await db.execute(select(Hotel.owner_user_id).where(Hotel.id == hotel_id))
+    ).scalar_one()
+    snapshot = {"hotel_id": hotel_id, "name_ru": s.name_ru}
+    sid_snap = s.id
     await db.delete(s)
     await db.commit()
+    await audit(
+        db, ctx,
+        owner_user_id=hotel_owner_id,
+        action="service.delete",
+        subject_type="service",
+        subject_id=sid_snap,
+        payload=snapshot,
+    )
     return None
 
 
@@ -738,16 +899,18 @@ async def delete_service(
 async def list_incoming_bookings(
     status_filter: BookingStatus | None = Query(default=None, alias="status"),
     hotel_id: int | None = Query(default=None),
+    owner_id: int | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=500),
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
+    accessible_ids = _scope_owner_ids(ctx, owner_id)
     stmt = (
         select(Booking, Room, Hotel, Client)
         .join(Room, Room.id == Booking.room_id)
         .join(Hotel, Hotel.id == Room.hotel_id)
         .join(Client, Client.id == Booking.client_id)
-        .where(Hotel.owner_user_id == ctx.user.id)
+        .where(Hotel.owner_user_id.in_(accessible_ids))
         .order_by(Booking.created_at.desc())
         .limit(limit)
     )
@@ -778,20 +941,29 @@ async def list_incoming_bookings(
 
 
 async def _get_my_booking(
-    db: AsyncSession, ctx: AuthContext, code: str
+    db: AsyncSession,
+    ctx: AuthContext,
+    code: str,
+    *,
+    require_perm: str | None = None,
 ) -> tuple[Booking, Room, Hotel, Client]:
+    accessible_ids = list(ctx.accessible_owners.keys())
     row = (
         await db.execute(
             select(Booking, Room, Hotel, Client)
             .join(Room, Room.id == Booking.room_id)
             .join(Hotel, Hotel.id == Room.hotel_id)
             .join(Client, Client.id == Booking.client_id)
-            .where(Booking.code == code, Hotel.owner_user_id == ctx.user.id)
+            .where(Booking.code == code, Hotel.owner_user_id.in_(accessible_ids))
             .with_for_update(of=Booking)
         )
     ).first()
     if row is None:
         raise APIError(404, "not_found", "Booking not found")
+    if require_perm is not None:
+        access = ctx.accessible_owners[row[2].owner_user_id]
+        if not access.has(require_perm):
+            raise APIError(403, "permission_denied", f"Missing permission: {require_perm}")
     return row
 
 
@@ -819,14 +991,23 @@ async def confirm_booking(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    b, r, h, c = await _get_my_booking(db, ctx, code)
+    b, r, h, c = await _get_my_booking(db, ctx, code, require_perm="manage_bookings")
     if b.status != BookingStatus.pending:
         raise APIError(409, "conflict", f"Booking is {b.status.value}, only pending can be confirmed")
     b.status = BookingStatus.paid
     hotel_id_for_pub = h.id
+    owner_id_snap = h.owner_user_id
     await db.commit()
     await db.refresh(b)
     await pubsub.publish_refresh(hotel_id_for_pub)
+    await audit(
+        db, ctx,
+        owner_user_id=owner_id_snap,
+        action="booking.confirm",
+        subject_type="booking",
+        subject_id=b.id,
+        payload={"code": b.code, "hotel_id": hotel_id_for_pub},
+    )
     return _to_partner_booking(b, r, h, c)
 
 
@@ -836,7 +1017,7 @@ async def cancel_booking(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    b, r, h, c = await _get_my_booking(db, ctx, code)
+    b, r, h, c = await _get_my_booking(db, ctx, code, require_perm="manage_bookings")
     if b.status in (BookingStatus.cancelled, BookingStatus.refunded):
         raise APIError(409, "conflict", f"Booking is already {b.status.value}")
 
@@ -868,9 +1049,18 @@ async def cancel_booking(
 
     b.status = BookingStatus.cancelled
     hotel_id_for_pub = h.id
+    owner_id_snap = h.owner_user_id
     await db.commit()
     await db.refresh(b)
     await pubsub.publish_refresh(hotel_id_for_pub)
+    await audit(
+        db, ctx,
+        owner_user_id=owner_id_snap,
+        action="booking.cancel",
+        subject_type="booking",
+        subject_id=b.id,
+        payload={"code": b.code, "hotel_id": hotel_id_for_pub},
+    )
     return _to_partner_booking(b, r, h, c)
 
 
@@ -918,18 +1108,21 @@ async def create_walkin_booking(
     if payload.check_in < today:
         raise APIError(400, "bad_request", "check_in is in the past")
 
-    # Verify room belongs to this partner's hotel + lock it.
+    # Verify room belongs to an accessible owner's hotel + lock it.
+    accessible_ids = list(ctx.accessible_owners.keys())
     row = (
         await db.execute(
             select(Room, Hotel)
             .join(Hotel, Hotel.id == Room.hotel_id)
-            .where(Room.id == payload.room_id, Hotel.owner_user_id == ctx.user.id)
+            .where(Room.id == payload.room_id, Hotel.owner_user_id.in_(accessible_ids))
             .with_for_update(of=Room)
         )
     ).first()
     if row is None:
         raise APIError(404, "not_found", "Room not found")
     room, hotel = row
+    if not ctx.accessible_owners[hotel.owner_user_id].has("manage_bookings"):
+        raise APIError(403, "permission_denied", "Missing permission: manage_bookings")
     if room.capacity < payload.guests:
         raise APIError(400, "bad_request", "Too many guests for this room")
 
@@ -992,9 +1185,25 @@ async def create_walkin_booking(
     )
     db.add(booking)
     hotel_id_for_pub = hotel.id
+    owner_id_snap = hotel.owner_user_id
     await db.commit()
     await db.refresh(booking)
     await pubsub.publish_refresh(hotel_id_for_pub)
+    await audit(
+        db, ctx,
+        owner_user_id=owner_id_snap,
+        action="walkin.create",
+        subject_type="booking",
+        subject_id=booking.id,
+        payload={
+            "code": booking.code,
+            "hotel_id": hotel_id_for_pub,
+            "room_id": room.id,
+            "check_in": str(booking.check_in),
+            "check_out": str(booking.check_out),
+            "total_kgs": booking.total_kgs,
+        },
+    )
     return _to_partner_booking(booking, room, hotel, client)
 
 
@@ -1002,15 +1211,17 @@ async def create_walkin_booking(
 
 @router.get("/rooms", response_model=list[RoomFlatView])
 async def list_all_my_rooms(
+    owner_id: int | None = Query(default=None),
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
+    accessible_ids = _scope_owner_ids(ctx, owner_id)
     today = date.today()
     rows = (
         await db.execute(
             select(Room, Hotel)
             .join(Hotel, Hotel.id == Room.hotel_id)
-            .where(Hotel.owner_user_id == ctx.user.id)
+            .where(Hotel.owner_user_id.in_(accessible_ids))
             .order_by(Hotel.name_ru, Room.id)
         )
     ).all()
@@ -1047,16 +1258,17 @@ async def list_all_my_rooms(
 # ─── /p/clients ────────────────────────────────────────────────────────────
 
 async def _client_visible_to_me(
-    db: AsyncSession, partner_user_id: int, client_id: int
+    db: AsyncSession, ctx: AuthContext, client_id: int
 ) -> Client | None:
-    """A client is visible to a partner only if they have a booking in one
-    of the partner's hotels."""
+    """A client is visible to a partner-scope user only if they have a booking
+    in one of the accessible owners' hotels."""
+    accessible_ids = list(ctx.accessible_owners.keys())
     stmt = (
         select(Client)
         .join(Booking, Booking.client_id == Client.id)
         .join(Room, Room.id == Booking.room_id)
         .join(Hotel, Hotel.id == Room.hotel_id)
-        .where(Client.id == client_id, Hotel.owner_user_id == partner_user_id)
+        .where(Client.id == client_id, Hotel.owner_user_id.in_(accessible_ids))
         .limit(1)
     )
     return (await db.execute(stmt)).scalar_one_or_none()
@@ -1081,11 +1293,13 @@ def _to_client_view(c: Client, bookings_count: int, last_date: date | None) -> C
 
 @router.get("/clients", response_model=list[ClientPartnerView])
 async def list_my_clients(
+    owner_id: int | None = Query(default=None),
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    """All clients who have at least one booking in any of my hotels.
-    bookings_count / last_booking_date are scoped to MY hotels only."""
+    """All clients who have at least one booking in any of my accessible
+    owners' hotels (optionally scoped to one ?owner_id=)."""
+    accessible_ids = _scope_owner_ids(ctx, owner_id)
     from sqlalchemy import func as sa_func
     stmt = (
         select(
@@ -1096,7 +1310,7 @@ async def list_my_clients(
         .join(Booking, Booking.client_id == Client.id)
         .join(Room, Room.id == Booking.room_id)
         .join(Hotel, Hotel.id == Room.hotel_id)
-        .where(Hotel.owner_user_id == ctx.user.id)
+        .where(Hotel.owner_user_id.in_(accessible_ids))
         .group_by(Client.id)
         .order_by(sa_func.max(Booking.created_at).desc())
         .limit(500)
@@ -1134,16 +1348,17 @@ async def get_my_client(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    c = await _client_visible_to_me(db, ctx.user.id, client_id)
+    c = await _client_visible_to_me(db, ctx, client_id)
     if c is None:
         raise APIError(404, "not_found", "Client not found")
+    accessible_ids = list(ctx.accessible_owners.keys())
     from sqlalchemy import func as sa_func
     cnt, last = (
         await db.execute(
             select(sa_func.count(Booking.id), sa_func.max(Booking.check_in))
             .join(Room, Room.id == Booking.room_id)
             .join(Hotel, Hotel.id == Room.hotel_id)
-            .where(Booking.client_id == c.id, Hotel.owner_user_id == ctx.user.id)
+            .where(Booking.client_id == c.id, Hotel.owner_user_id.in_(accessible_ids))
         )
     ).one()
     return _to_client_view(c, cnt or 0, last)
@@ -1155,15 +1370,16 @@ async def list_my_client_bookings(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    c = await _client_visible_to_me(db, ctx.user.id, client_id)
+    c = await _client_visible_to_me(db, ctx, client_id)
     if c is None:
         raise APIError(404, "not_found", "Client not found")
+    accessible_ids = list(ctx.accessible_owners.keys())
     rows = (
         await db.execute(
             select(Booking, Room, Hotel)
             .join(Room, Room.id == Booking.room_id)
             .join(Hotel, Hotel.id == Room.hotel_id)
-            .where(Booking.client_id == c.id, Hotel.owner_user_id == ctx.user.id)
+            .where(Booking.client_id == c.id, Hotel.owner_user_id.in_(accessible_ids))
             .order_by(Booking.created_at.desc())
         )
     ).all()
@@ -1177,9 +1393,29 @@ async def update_my_client(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    c = await _client_visible_to_me(db, ctx.user.id, client_id)
+    c = await _client_visible_to_me(db, ctx, client_id)
     if c is None:
         raise APIError(404, "not_found", "Client not found")
+    # Allow edit if user has manage_bookings on ANY accessible owner where the
+    # client has bookings. Client records are global (one row), so this is the
+    # cleanest gate that doesn't require per-owner forking.
+    owner_ids_with_bookings = set(
+        (
+            await db.execute(
+                select(Hotel.owner_user_id)
+                .join(Room, Room.hotel_id == Hotel.id)
+                .join(Booking, Booking.room_id == Room.id)
+                .where(Booking.client_id == c.id)
+                .distinct()
+            )
+        ).scalars()
+    )
+    has_perm = any(
+        oid in ctx.accessible_owners and ctx.accessible_owners[oid].has("manage_bookings")
+        for oid in owner_ids_with_bookings
+    )
+    if not has_perm:
+        raise APIError(403, "permission_denied", "Missing permission: manage_bookings")
     data = payload.model_dump(exclude_unset=True)
     if "phone" in data:
         data["phone"] = normalize_phone(data["phone"])
@@ -1189,4 +1425,281 @@ async def update_my_client(
         setattr(c, k, v)
     await db.commit()
     await db.refresh(c)
+    await audit(
+        db, ctx,
+        owner_user_id=next(iter(owner_ids_with_bookings & set(ctx.accessible_owners.keys()))),
+        action="client.update",
+        subject_type="client",
+        subject_id=c.id,
+        payload=data,
+    )
     return _to_client_view(c, bookings_count=0, last_date=None)
+
+
+# ─── Staff ────────────────────────────────────────────────────────────────
+
+def _ps_to_perms(ps: PartnerStaff) -> StaffPerms:
+    return StaffPerms(
+        manage_hotel=ps.perm_manage_hotel,
+        manage_rooms=ps.perm_manage_rooms,
+        manage_bookings=ps.perm_manage_bookings,
+        manage_staff=ps.perm_manage_staff,
+    )
+
+
+def _ps_to_view(ps: PartnerStaff, staff_user: User) -> StaffView:
+    return StaffView(
+        id=ps.id,
+        owner_user_id=ps.owner_user_id,
+        staff_user_id=ps.staff_user_id,
+        staff_telegram_id=staff_user.telegram_id,
+        staff_display_name=staff_user.first_name,
+        perms=_ps_to_perms(ps),
+        note=ps.note,
+        created_at=ps.created_at,
+    )
+
+
+@router.get("/staff", response_model=list[StaffView])
+async def list_staff(
+    owner_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    # Default: list staff for the owner-self (if any) — staff can request
+    # explicitly by owner_id (must have manage_staff there).
+    if owner_id is None:
+        self_access = ctx.accessible_owners.get(ctx.user.id)
+        if self_access is None or not self_access.is_self:
+            raise APIError(400, "bad_request", "owner_id is required")
+        owner_id = ctx.user.id
+    access = ctx.accessible_owners.get(owner_id)
+    if access is None:
+        raise APIError(404, "not_found", "Owner not accessible")
+    if not access.has("manage_staff"):
+        raise APIError(403, "permission_denied", "Missing permission: manage_staff")
+
+    rows = (
+        await db.execute(
+            select(PartnerStaff, User)
+            .join(User, User.id == PartnerStaff.staff_user_id)
+            .where(PartnerStaff.owner_user_id == owner_id)
+            .order_by(PartnerStaff.created_at.desc())
+        )
+    ).all()
+    return [_ps_to_view(ps, u) for (ps, u) in rows]
+
+
+@router.post("/staff", response_model=StaffView, status_code=201)
+async def add_staff(
+    payload: StaffCreate,
+    owner_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    if owner_id is None:
+        self_access = ctx.accessible_owners.get(ctx.user.id)
+        if self_access is None or not self_access.is_self:
+            raise APIError(400, "bad_request", "owner_id is required")
+        owner_id = ctx.user.id
+    access = ctx.accessible_owners.get(owner_id)
+    if access is None:
+        raise APIError(404, "not_found", "Owner not accessible")
+    if not access.has("manage_staff"):
+        raise APIError(403, "permission_denied", "Missing permission: manage_staff")
+
+    if payload.telegram_id == 0:
+        raise APIError(400, "bad_request", "Invalid telegram_id")
+
+    # Look up or create the user stub.
+    staff_user = (
+        await db.execute(select(User).where(User.telegram_id == payload.telegram_id))
+    ).scalar_one_or_none()
+    if staff_user is None:
+        staff_user = User(
+            telegram_id=payload.telegram_id,
+            role=UserRole.partner,
+        )
+        db.add(staff_user)
+        await db.flush()
+    elif staff_user.role == UserRole.admin:
+        raise APIError(409, "incompatible_role", "Cannot add admin as staff")
+    elif staff_user.role == UserRole.client:
+        staff_user.role = UserRole.partner  # upgrade
+
+    if staff_user.id == owner_id:
+        raise APIError(400, "bad_request", "Cannot add yourself as your own staff")
+
+    existing = (
+        await db.execute(
+            select(PartnerStaff).where(
+                PartnerStaff.owner_user_id == owner_id,
+                PartnerStaff.staff_user_id == staff_user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise APIError(409, "already_member", "User is already a staff member")
+
+    ps = PartnerStaff(
+        owner_user_id=owner_id,
+        staff_user_id=staff_user.id,
+        perm_manage_hotel=payload.perms.manage_hotel,
+        perm_manage_rooms=payload.perms.manage_rooms,
+        perm_manage_bookings=payload.perms.manage_bookings,
+        perm_manage_staff=payload.perms.manage_staff,
+        note=payload.note,
+        added_by_user_id=ctx.user.id,
+    )
+    db.add(ps)
+    await db.commit()
+    await db.refresh(ps)
+    await audit(
+        db, ctx,
+        owner_user_id=owner_id,
+        action="staff.add",
+        subject_type="staff",
+        subject_id=ps.id,
+        payload={
+            "staff_user_id": staff_user.id,
+            "telegram_id": staff_user.telegram_id,
+            "perms": payload.perms.model_dump(),
+            "note": payload.note,
+        },
+    )
+    return _ps_to_view(ps, staff_user)
+
+
+@router.put("/staff/{staff_id}", response_model=StaffView)
+async def update_staff(
+    staff_id: int,
+    payload: StaffUpdate,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    row = (
+        await db.execute(
+            select(PartnerStaff, User)
+            .join(User, User.id == PartnerStaff.staff_user_id)
+            .where(PartnerStaff.id == staff_id)
+        )
+    ).first()
+    if row is None:
+        raise APIError(404, "not_found", "Staff member not found")
+    ps, staff_user = row
+    access = ctx.accessible_owners.get(ps.owner_user_id)
+    if access is None:
+        raise APIError(404, "not_found", "Staff member not found")
+    if not access.has("manage_staff"):
+        raise APIError(403, "permission_denied", "Missing permission: manage_staff")
+
+    diff: dict = {}
+    if payload.perms is not None:
+        before = _ps_to_perms(ps).model_dump()
+        ps.perm_manage_hotel = payload.perms.manage_hotel
+        ps.perm_manage_rooms = payload.perms.manage_rooms
+        ps.perm_manage_bookings = payload.perms.manage_bookings
+        ps.perm_manage_staff = payload.perms.manage_staff
+        after = payload.perms.model_dump()
+        if before != after:
+            diff["perms"] = {"before": before, "after": after}
+    if payload.note is not None and payload.note != ps.note:
+        diff["note"] = {"before": ps.note, "after": payload.note}
+        ps.note = payload.note
+    await db.commit()
+    await db.refresh(ps)
+    if diff:
+        await audit(
+            db, ctx,
+            owner_user_id=ps.owner_user_id,
+            action="staff.update",
+            subject_type="staff",
+            subject_id=ps.id,
+            payload=diff,
+        )
+    return _ps_to_view(ps, staff_user)
+
+
+@router.delete("/staff/{staff_id}", status_code=204)
+async def remove_staff(
+    staff_id: int,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    ps = (
+        await db.execute(select(PartnerStaff).where(PartnerStaff.id == staff_id))
+    ).scalar_one_or_none()
+    if ps is None:
+        raise APIError(404, "not_found", "Staff member not found")
+    access = ctx.accessible_owners.get(ps.owner_user_id)
+    if access is None:
+        raise APIError(404, "not_found", "Staff member not found")
+    if not access.has("manage_staff"):
+        raise APIError(403, "permission_denied", "Missing permission: manage_staff")
+
+    owner_id = ps.owner_user_id
+    snapshot = {
+        "staff_user_id": ps.staff_user_id,
+        "perms": _ps_to_perms(ps).model_dump(),
+        "note": ps.note,
+    }
+    await db.delete(ps)
+    await db.commit()
+    await audit(
+        db, ctx,
+        owner_user_id=owner_id,
+        action="staff.remove",
+        subject_type="staff",
+        subject_id=staff_id,
+        payload=snapshot,
+    )
+    return None
+
+
+# ─── Audit log read ───────────────────────────────────────────────────────
+
+@router.get("/audit", response_model=list[AuditEntryView])
+async def list_audit(
+    owner_id: int | None = Query(default=None),
+    action_filter: str | None = Query(default=None, alias="action"),
+    subject_type_filter: str | None = Query(default=None, alias="subject_type"),
+    since: datetime | None = Query(default=None),
+    until: datetime | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    accessible_ids = _scope_owner_ids(ctx, owner_id)
+    stmt = (
+        select(AuditLog, User)
+        .join(User, User.id == AuditLog.actor_user_id)
+        .where(AuditLog.owner_user_id.in_(accessible_ids))
+        .order_by(AuditLog.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    if action_filter:
+        stmt = stmt.where(AuditLog.action == action_filter)
+    if subject_type_filter:
+        stmt = stmt.where(AuditLog.subject_type == subject_type_filter)
+    if since:
+        stmt = stmt.where(AuditLog.created_at >= since)
+    if until:
+        stmt = stmt.where(AuditLog.created_at < until)
+    rows = (await db.execute(stmt)).all()
+    return [
+        AuditEntryView(
+            id=a.id,
+            owner_user_id=a.owner_user_id,
+            actor_user_id=a.actor_user_id,
+            actor_display_name=u.first_name,
+            actor_role=a.actor_role,
+            action=a.action,
+            subject_type=a.subject_type,
+            subject_id=a.subject_id,
+            payload=a.payload,
+            created_at=a.created_at,
+        )
+        for (a, u) in rows
+    ]

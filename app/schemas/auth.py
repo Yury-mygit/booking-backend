@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.models.models import Lang, UserRole
+from app.schemas.partner import OwnerAccess
 
 
 class AuthTgRequest(BaseModel):
@@ -25,3 +26,4 @@ class AuthTgResponse(BaseModel):
     token: str
     expires_at: datetime
     user: AuthTgUser
+    accessible_owners: list[OwnerAccess] = Field(default_factory=list)

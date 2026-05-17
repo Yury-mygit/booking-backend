@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth_scope import load_accessible_owners
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import AuthContext, current_user
@@ -12,7 +13,29 @@ from app.core.exceptions import APIError
 from app.core.tg_auth import InitDataError, verify_init_data
 from app.models.models import Lang, PartnerProfile, Session, User, UserRole
 from app.schemas.auth import AuthTgRequest, AuthTgResponse, AuthTgUser
+from app.schemas.partner import OwnerAccess, StaffPerms
 from app.utils import get_or_create_client_for_user
+
+
+async def _owners_response(db: AsyncSession, user: User) -> list[OwnerAccess]:
+    """Build response list of accessible owners for a partner-role user."""
+    if user.role != UserRole.partner:
+        return []
+    raw = await load_accessible_owners(db, user)
+    return [
+        OwnerAccess(
+            owner_user_id=op.owner_user_id,
+            owner_display_name=op.owner_display_name,
+            is_self=op.is_self,
+            perms=StaffPerms(
+                manage_hotel=op.manage_hotel,
+                manage_rooms=op.manage_rooms,
+                manage_bookings=op.manage_bookings,
+                manage_staff=op.manage_staff,
+            ),
+        )
+        for op in raw.values()
+    ]
 
 
 async def _ensure_partner_profile(db: AsyncSession, user: User) -> PartnerProfile:
@@ -134,6 +157,7 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
             is_new=is_new,
             partner_status=_partner_status(pp) if role == UserRole.partner else None,
         ),
+        accessible_owners=await _owners_response(db, user),
     )
 
 
@@ -150,6 +174,7 @@ async def whoami(
             )
         ).scalar_one_or_none()
         partner_status = _partner_status(pp)
+    accessible_owners = await _owners_response(db, ctx.user)
     return {
         "user_id": ctx.user.id,
         "telegram_id": ctx.user.telegram_id,
@@ -158,6 +183,7 @@ async def whoami(
         "first_name": ctx.user.first_name,
         "session_expires_at": ctx.session.expires_at.isoformat(),
         "partner_status": partner_status,
+        "accessible_owners": [o.model_dump() for o in accessible_owners],
     }
 
 
@@ -216,4 +242,5 @@ async def dev_login(
             is_new=is_new,
             partner_status=_partner_status(pp) if role == UserRole.partner else None,
         ),
+        accessible_owners=await _owners_response(db, user),
     )

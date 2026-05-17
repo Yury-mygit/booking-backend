@@ -4,16 +4,23 @@ from fastapi import Depends, Header
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth_scope import OwnerPerms, load_accessible_owners
 from app.core.database import get_db
 from app.core.exceptions import APIError
 from app.models.models import Session, User, UserRole
 
 
 class AuthContext:
-    def __init__(self, user: User, session: Session) -> None:
+    def __init__(
+        self,
+        user: User,
+        session: Session,
+        accessible_owners: dict[int, OwnerPerms] | None = None,
+    ) -> None:
         self.user = user
         self.session = session
         self.role: UserRole = session.role
+        self.accessible_owners: dict[int, OwnerPerms] = accessible_owners or {}
 
 
 async def _resolve_session(
@@ -64,26 +71,25 @@ def require_role(*allowed: UserRole):
     return _dep
 
 
-async def require_verified_partner(
+async def require_partner_or_staff(
     ctx: AuthContext = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AuthContext:
-    """Like require_role(partner) but also rejects partners that haven't
-    been verified yet. Returns 403 with code `partner_pending` so the
-    frontend can show the waiting screen."""
+    """Pass for partner users that have at least one accessible owner
+    (own verified profile OR a staff membership). 403 `partner_pending`
+    otherwise — the FE keeps showing the waiting screen on that code.
+    """
     if ctx.role != UserRole.partner:
         raise APIError(403, "forbidden", f"Role {ctx.role.value} not allowed")
-    # Lazy import — partner_profiles isn't needed elsewhere in deps.
-    from app.models.models import PartnerProfile
-    pp = (
-        await db.execute(
-            select(PartnerProfile).where(PartnerProfile.user_id == ctx.user.id)
-        )
-    ).scalar_one_or_none()
-    if pp is None or pp.verified_at is None:
+    ctx.accessible_owners = await load_accessible_owners(db, ctx.user)
+    if not ctx.accessible_owners:
         raise APIError(
             403,
             "partner_pending",
             "Partner account is awaiting admin approval",
         )
     return ctx
+
+
+# Backwards-compat alias: existing endpoints reference the old name.
+require_verified_partner = require_partner_or_staff

@@ -237,3 +237,56 @@ class RoomFlatView(BaseModel):
     price_kgs: int
     today_status: AvailabilityStatus  # free / blocked / booked
     photo: str | None  # first photo of the room (or None)
+
+
+# ─── Staff ──────────────────────────────────────────────────────────────
+
+class StaffPerms(BaseModel):
+    manage_hotel: bool = False
+    manage_rooms: bool = False
+    manage_bookings: bool = True
+    manage_staff: bool = False
+
+
+class OwnerAccess(BaseModel):
+    owner_user_id: int
+    owner_display_name: str | None
+    is_self: bool
+    perms: StaffPerms
+
+
+class StaffCreate(BaseModel):
+    telegram_id: int
+    perms: StaffPerms = Field(default_factory=StaffPerms)
+    note: str | None = Field(default=None, max_length=128)
+
+
+class StaffUpdate(BaseModel):
+    perms: StaffPerms | None = None
+    note: str | None = Field(default=None, max_length=128)
+
+
+class StaffView(BaseModel):
+    id: int
+    owner_user_id: int
+    staff_user_id: int
+    staff_telegram_id: int
+    staff_display_name: str | None
+    perms: StaffPerms
+    note: str | None
+    created_at: datetime
+
+
+# ─── Audit ──────────────────────────────────────────────────────────────
+
+class AuditEntryView(BaseModel):
+    id: int
+    owner_user_id: int
+    actor_user_id: int
+    actor_display_name: str | None
+    actor_role: str
+    action: str
+    subject_type: str | None
+    subject_id: int | None
+    payload: dict | None
+    created_at: datetime

@@ -17,6 +17,7 @@ class AdminUserView(BaseModel):
     created_at: datetime
     is_verified_partner: bool
     is_pending_partner: bool       # has partner_profile + verified_at IS NULL
+    is_superadmin: bool
     hotels_count: int
     bookings_count: int            # bookings made as a client (via clients.user_id)
 

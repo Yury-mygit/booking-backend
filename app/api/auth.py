@@ -156,6 +156,7 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
             first_name=user.first_name,
             is_new=is_new,
             partner_status=_partner_status(pp) if role == UserRole.partner else None,
+            is_superadmin=user.is_superadmin,
         ),
         accessible_owners=await _owners_response(db, user),
     )
@@ -183,6 +184,7 @@ async def whoami(
         "first_name": ctx.user.first_name,
         "session_expires_at": ctx.session.expires_at.isoformat(),
         "partner_status": partner_status,
+        "is_superadmin": ctx.user.is_superadmin,
         "accessible_owners": [o.model_dump() for o in accessible_owners],
     }
 
@@ -241,6 +243,7 @@ async def dev_login(
             first_name=user.first_name,
             is_new=is_new,
             partner_status=_partner_status(pp) if role == UserRole.partner else None,
+            is_superadmin=user.is_superadmin,
         ),
         accessible_owners=await _owners_response(db, user),
     )

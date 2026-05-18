@@ -20,6 +20,7 @@ class AuthTgUser(BaseModel):
     # Only meaningful when role == "partner": "pending" until an admin verifies,
     # then "verified". For other roles — null.
     partner_status: str | None = None
+    is_superadmin: bool = False
 
 
 class AuthTgResponse(BaseModel):

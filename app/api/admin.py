@@ -20,6 +20,7 @@ from app.models.models import (
     Payment,
     PaymentStatus,
     Room,
+    Session,
     User,
     UserRole,
 )
@@ -56,6 +57,7 @@ def _to_admin_user_view(
         created_at=u.created_at,
         is_verified_partner=verified_at is not None,
         is_pending_partner=has_profile and verified_at is None,
+        is_superadmin=u.is_superadmin,
         hotels_count=hotels_count,
         bookings_count=bookings_count,
     )
@@ -171,6 +173,65 @@ async def promote_admin(
     await db.commit()
     return _to_admin_user_view(user, verified_at=None, has_profile=False,
                                 hotels_count=0, bookings_count=0)
+
+
+@router.post("/users/{user_id}/revoke-partner", response_model=AdminUserView)
+async def revoke_partner(
+    user_id: int,
+    ctx: AuthContext = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+):
+    """Drop partner_profile. Hotels owned by this user stay (FK survives) but
+    require_verified_partner will start returning 403 — the user can reapply
+    via the partner bot, which recreates the profile in pending state."""
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if user is None:
+        raise APIError(404, "not_found", "User not found")
+    profile = (
+        await db.execute(select(PartnerProfile).where(PartnerProfile.user_id == user_id))
+    ).scalar_one_or_none()
+    if profile is None:
+        raise APIError(409, "conflict", "User has no partner profile")
+    await db.execute(delete(PartnerProfile).where(PartnerProfile.user_id == user_id))
+    await db.commit()
+    await db.refresh(user)
+    return _to_admin_user_view(user, verified_at=None, has_profile=False,
+                                hotels_count=0, bookings_count=0)
+
+
+@router.post("/users/{user_id}/demote-admin", response_model=AdminUserView)
+async def demote_admin(
+    user_id: int,
+    ctx: AuthContext = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reverse promote-admin. Superadmins are immune (403). New role:
+    partner if a partner_profile exists, otherwise client. Existing admin
+    sessions for this user are deleted so the demotion takes effect now."""
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if user is None:
+        raise APIError(404, "not_found", "User not found")
+    if user.role != UserRole.admin:
+        raise APIError(400, "bad_request", "User is not an admin")
+    if user.is_superadmin:
+        raise APIError(403, "forbidden", "Superadmin cannot be demoted")
+
+    profile = (
+        await db.execute(select(PartnerProfile).where(PartnerProfile.user_id == user_id))
+    ).scalar_one_or_none()
+    user.role = UserRole.partner if profile is not None else UserRole.client
+    await db.execute(
+        delete(Session).where(Session.user_id == user_id, Session.role == UserRole.admin)
+    )
+    await db.commit()
+    await db.refresh(user)
+    return _to_admin_user_view(
+        user,
+        verified_at=profile.verified_at if profile is not None else None,
+        has_profile=profile is not None,
+        hotels_count=0,
+        bookings_count=0,
+    )
 
 
 # ─── Hotels ────────────────────────────────────────────────────────────────

@@ -283,6 +283,30 @@ class StaffView(BaseModel):
     created_at: datetime
 
 
+# ─── Staff invite (внешние ссылки) ──────────────────────────────────────
+
+class StaffInviteCreate(BaseModel):
+    perms: StaffPerms = Field(default_factory=StaffPerms)
+    note: str | None = Field(default=None, max_length=128)
+    expires_in_days: int = Field(default=7, ge=1, le=90)
+
+
+class StaffInviteView(BaseModel):
+    id: int
+    owner_user_id: int
+    token: str
+    url: str  # deep-link для отправки в чат
+    perms: StaffPerms
+    note: str | None
+    expires_at: datetime
+    used_at: datetime | None
+    created_at: datetime
+
+
+class StaffInviteAccept(BaseModel):
+    token: str
+
+
 # ─── Audit ──────────────────────────────────────────────────────────────
 
 class AuditEntryView(BaseModel):

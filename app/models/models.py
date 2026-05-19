@@ -329,6 +329,32 @@ class PartnerStaff(Base):
     )
 
 
+class PartnerStaffInvite(Base):
+    __tablename__ = "partner_staff_invite"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    perm_manage_hotel: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    perm_manage_rooms: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    perm_manage_bookings: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    perm_manage_staff: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    note: Mapped[str | None] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    used_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

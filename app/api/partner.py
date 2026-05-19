@@ -40,6 +40,7 @@ from app.schemas.partner import (
     HotelStats,
     HotelUpdate,
     OwnerAccess,
+    PartnerBookingPostpaySet,
     PartnerBookingView,
     RoomCreate,
     RoomFlatView,
@@ -920,24 +921,7 @@ async def list_incoming_bookings(
         stmt = stmt.where(Hotel.id == hotel_id)
 
     rows = (await db.execute(stmt)).all()
-    return [
-        PartnerBookingView(
-            id=b.id,
-            code=b.code,
-            room_id=r.id,
-            room_name_ru=r.name_ru,
-            hotel_id=h.id,
-            hotel_name_ru=h.name_ru,
-            client_first_name=c.first_name,
-            check_in=b.check_in,
-            check_out=b.check_out,
-            guests=b.guests,
-            total_kgs=b.total_kgs,
-            status=b.status,
-            created_at=b.created_at,
-        )
-        for b, r, h, c in rows
-    ]
+    return [_to_partner_booking(b, r, h, c) for b, r, h, c in rows]
 
 
 async def _get_my_booking(
@@ -981,6 +965,8 @@ def _to_partner_booking(b: Booking, r: Room, h: Hotel, c: Client) -> PartnerBook
         guests=b.guests,
         total_kgs=b.total_kgs,
         status=b.status,
+        postpay=b.postpay,
+        confirmed=b.confirmed,
         created_at=b.created_at,
     )
 
@@ -991,10 +977,14 @@ async def confirm_booking(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
+    """Partner guarantee to accept the guest. Sets confirmed=true; does not
+    touch payment status. Online-paid bookings auto-confirm via /c/payments."""
     b, r, h, c = await _get_my_booking(db, ctx, code, require_perm="manage_bookings")
     if b.status != BookingStatus.pending:
-        raise APIError(409, "conflict", f"Booking is {b.status.value}, only pending can be confirmed")
-    b.status = BookingStatus.paid
+        raise APIError(409, "conflict", f"Booking is {b.status.value}, cannot confirm")
+    if b.confirmed:
+        raise APIError(409, "conflict", "Booking is already confirmed")
+    b.confirmed = True
     hotel_id_for_pub = h.id
     owner_id_snap = h.owner_user_id
     await db.commit()
@@ -1007,6 +997,71 @@ async def confirm_booking(
         subject_type="booking",
         subject_id=b.id,
         payload={"code": b.code, "hotel_id": hotel_id_for_pub},
+    )
+    return _to_partner_booking(b, r, h, c)
+
+
+@router.post("/bookings/{code}/mark-paid", response_model=PartnerBookingView)
+async def mark_paid(
+    code: str,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    """Postpay flow: record physical cash receipt → status=paid + confirmed=true.
+    Only for postpay bookings; online ones become paid automatically through
+    /c/payments and don't need this."""
+    b, r, h, c = await _get_my_booking(db, ctx, code, require_perm="manage_bookings")
+    if b.status != BookingStatus.pending:
+        raise APIError(409, "conflict", f"Booking is {b.status.value}, cannot mark paid")
+    if not b.postpay:
+        raise APIError(
+            400,
+            "bad_request",
+            "Only postpay bookings accept manual mark-paid; online bookings settle via /c/payments",
+        )
+    b.status = BookingStatus.paid
+    b.confirmed = True  # paid implies confirmed
+    hotel_id_for_pub = h.id
+    owner_id_snap = h.owner_user_id
+    await db.commit()
+    await db.refresh(b)
+    await pubsub.publish_refresh(hotel_id_for_pub)
+    await audit(
+        db, ctx,
+        owner_user_id=owner_id_snap,
+        action="booking.mark_paid",
+        subject_type="booking",
+        subject_id=b.id,
+        payload={"code": b.code, "hotel_id": hotel_id_for_pub},
+    )
+    return _to_partner_booking(b, r, h, c)
+
+
+@router.post("/bookings/{code}/postpay", response_model=PartnerBookingView)
+async def set_postpay(
+    code: str,
+    payload: PartnerBookingPostpaySet,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle postpay flag on a booking. Postpay = «оплата у стойки», 24h
+    auto-cancel skips it and partner confirms manually after physical payment."""
+    b, r, h, c = await _get_my_booking(db, ctx, code, require_perm="manage_bookings")
+    if b.status not in (BookingStatus.pending, BookingStatus.paid):
+        raise APIError(409, "conflict", f"Cannot change postpay on {b.status.value} booking")
+    b.postpay = payload.postpay
+    hotel_id_for_pub = h.id
+    owner_id_snap = h.owner_user_id
+    await db.commit()
+    await db.refresh(b)
+    await pubsub.publish_refresh(hotel_id_for_pub)
+    await audit(
+        db, ctx,
+        owner_user_id=owner_id_snap,
+        action="booking.postpay",
+        subject_type="booking",
+        subject_id=b.id,
+        payload={"code": b.code, "postpay": b.postpay},
     )
     return _to_partner_booking(b, r, h, c)
 
@@ -1182,6 +1237,8 @@ async def create_walkin_booking(
         guests=payload.guests,
         total_kgs=total,
         status=BookingStatus.pending,
+        postpay=True,    # walk-in = физ. оплата у стойки; не подпадает под 24h auto-cancel
+        confirmed=True,  # партнёр сам её создал — гарантия приёма автоматически
     )
     db.add(booking)
     hotel_id_for_pub = hotel.id

@@ -18,9 +18,9 @@ from app.utils import get_or_create_client_for_user
 
 
 async def _owners_response(db: AsyncSession, user: User) -> list[OwnerAccess]:
-    """Build response list of accessible owners for a partner-role user."""
-    if user.role != UserRole.partner:
-        return []
+    """Build response list of accessible owners. Any user with a verified
+    partner_profile or staff memberships gets entries — including admins who
+    also happen to be partners (role can change after promote/demote)."""
     raw = await load_accessible_owners(db, user)
     return [
         OwnerAccess(

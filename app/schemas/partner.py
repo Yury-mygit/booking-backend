@@ -180,7 +180,13 @@ class PartnerBookingView(BaseModel):
     guests: int
     total_kgs: int
     status: BookingStatus
+    postpay: bool
+    confirmed: bool
     created_at: datetime
+
+
+class PartnerBookingPostpaySet(BaseModel):
+    postpay: bool
 
 
 class WalkinBookingCreate(BaseModel):

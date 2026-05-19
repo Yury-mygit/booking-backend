@@ -1,12 +1,33 @@
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api.info import router as info_router
 from app.api.router import api_router
+from app.core.autocancel import autocancel_loop
 from app.core.config import settings
 from app.core.exceptions import APIError
 
-app = FastAPI(title=settings.service_name, version=settings.version)
+logging.basicConfig(level=logging.INFO)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(autocancel_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title=settings.service_name, version=settings.version, lifespan=lifespan)
 app.include_router(info_router)
 app.include_router(api_router, prefix="/api/v1")
 

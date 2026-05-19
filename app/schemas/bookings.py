@@ -23,4 +23,6 @@ class BookingResponse(BaseModel):
     guests: int
     total_kgs: int
     status: BookingStatus
+    postpay: bool
+    confirmed: bool
     created_at: datetime

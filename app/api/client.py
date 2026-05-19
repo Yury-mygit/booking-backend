@@ -54,6 +54,8 @@ async def _build_response(db: AsyncSession, booking: Booking) -> BookingResponse
         guests=booking.guests,
         total_kgs=booking.total_kgs,
         status=booking.status,
+        postpay=booking.postpay,
+        confirmed=booking.confirmed,
         created_at=booking.created_at,
     )
 

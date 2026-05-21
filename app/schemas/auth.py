@@ -8,6 +8,7 @@ from app.schemas.partner import OwnerAccess
 
 class AuthTgRequest(BaseModel):
     init_data: str = Field(min_length=1)
+    requested_role: UserRole | None = None
 
 
 class AuthTgUser(BaseModel):
@@ -28,3 +29,4 @@ class AuthTgResponse(BaseModel):
     expires_at: datetime
     user: AuthTgUser
     accessible_owners: list[OwnerAccess] = Field(default_factory=list)
+    available_roles: list[UserRole] = Field(default_factory=list)

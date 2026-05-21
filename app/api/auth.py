@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.core.deps import AuthContext, current_user
 from app.core.exceptions import APIError
 from app.core.tg_auth import InitDataError, verify_init_data
-from app.models.models import Lang, PartnerProfile, Session, User, UserRole
+from app.models.models import Lang, PartnerProfile, PartnerStaff, Session, User, UserRole
 from app.schemas.auth import AuthTgRequest, AuthTgResponse, AuthTgUser
 from app.schemas.partner import OwnerAccess, StaffPerms
 from app.utils import get_or_create_client_for_user
@@ -63,6 +63,36 @@ def _partner_status(pp: PartnerProfile | None) -> str:
         return "pending"
     return "verified"
 
+
+async def compute_available_roles(db: AsyncSession, user: User) -> list[UserRole]:
+    """Roles a user is allowed to request:
+      - client: always.
+      - partner: has a PartnerProfile (any status) OR a partner_staff row.
+      - admin: users.role == admin.
+    """
+    roles: list[UserRole] = [UserRole.client]
+
+    pp_exists = (
+        await db.execute(
+            select(PartnerProfile.user_id).where(PartnerProfile.user_id == user.id)
+        )
+    ).scalar_one_or_none()
+    staff_exists = None
+    if pp_exists is None:
+        staff_exists = (
+            await db.execute(
+                select(PartnerStaff.id).where(PartnerStaff.staff_user_id == user.id)
+            )
+        ).scalar_one_or_none()
+    if pp_exists is not None or staff_exists is not None:
+        roles.append(UserRole.partner)
+
+    if user.role == UserRole.admin:
+        roles.append(UserRole.admin)
+
+    return roles
+
+
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
@@ -78,7 +108,7 @@ def _coerce_lang(language_code: str | None) -> Lang:
 @router.post("/tg", response_model=AuthTgResponse)
 async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) -> AuthTgResponse:
     try:
-        role, tg_user = verify_init_data(payload.init_data)
+        matched_role, tg_user = verify_init_data(payload.init_data)
     except InitDataError as exc:
         raise APIError(401, "invalid_init_data", str(exc)) from exc
 
@@ -92,21 +122,10 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
     user = existing.scalar_one_or_none()
     is_new = False
 
-    # Admin gate: opening the admin bot does NOT grant admin role on its own.
-    # The user must be pre-assigned `users.role = admin` (via promote_to_admin
-    # CLI or another admin's API call). Otherwise refuse — without this anyone
-    # who knows the admin bot username could obtain an admin session.
-    if role == UserRole.admin and (user is None or user.role != UserRole.admin):
-        raise APIError(
-            403,
-            "forbidden",
-            "Admin access requires pre-assigned admin role",
-        )
-
     if user is None:
         user = User(
             telegram_id=telegram_id,
-            role=role,
+            role=UserRole.client,
             lang=lang,
             first_name=first_name,
             last_name=last_name,
@@ -124,9 +143,11 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
         if username and user.username != username:
             user.username = username
 
-    # Auto-create a client profile for any TG user. Walk-in (no telegram_id)
-    # rows live alongside in the same table; this one is the TG-linked profile.
+    role = await _resolve_requested_role(db, user, payload.requested_role, matched_role)
+
     if role == UserRole.client:
+        # Auto-create a client profile for any TG user. Walk-in (no telegram_id)
+        # rows live alongside in the same table; this one is the TG-linked profile.
         await get_or_create_client_for_user(db, user)
 
     pp: PartnerProfile | None = None
@@ -142,6 +163,8 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
         expires_at=now + timedelta(seconds=settings.session_ttl_sec),
     )
     db.add(session)
+    available_roles = await compute_available_roles(db, user)
+    accessible_owners = await _owners_response(db, user)
     await db.commit()
     await db.refresh(user)
 
@@ -158,8 +181,33 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
             partner_status=_partner_status(pp) if role == UserRole.partner else None,
             is_superadmin=user.is_superadmin,
         ),
-        accessible_owners=await _owners_response(db, user),
+        accessible_owners=accessible_owners,
+        available_roles=available_roles,
     )
+
+
+async def _resolve_requested_role(
+    db: AsyncSession,
+    user: User,
+    requested: UserRole | None,
+    legacy_default: UserRole | None = None,
+) -> UserRole:
+    """Determine the role for the new session.
+
+    Order of precedence:
+      1. `requested` if the client sent it.
+      2. `legacy_default` — the role implied by which bot token signed initData
+         (transitional; supports partner/admin fronts before bot consolidation).
+      3. Fallback: client.
+
+    Admin requires users.role == admin; otherwise 403.
+    Partner is allowed for anyone — the row is the entry into the
+    pending-onboarding flow (admin verifies later).
+    """
+    role = requested or legacy_default or UserRole.client
+    if role == UserRole.admin and user.role != UserRole.admin:
+        raise APIError(403, "forbidden", "Admin access requires pre-assigned admin role")
+    return role
 
 
 @router.get("/whoami")
@@ -176,6 +224,7 @@ async def whoami(
         ).scalar_one_or_none()
         partner_status = _partner_status(pp)
     accessible_owners = await _owners_response(db, ctx.user)
+    available_roles = await compute_available_roles(db, ctx.user)
     return {
         "user_id": ctx.user.id,
         "telegram_id": ctx.user.telegram_id,
@@ -186,6 +235,7 @@ async def whoami(
         "partner_status": partner_status,
         "is_superadmin": ctx.user.is_superadmin,
         "accessible_owners": [o.model_dump() for o in accessible_owners],
+        "available_roles": [r.value for r in available_roles],
     }
 
 
@@ -206,19 +256,19 @@ async def dev_login(
     existing = await db.execute(select(User).where(User.telegram_id == telegram_id))
     user = existing.scalar_one_or_none()
     is_new = False
-    if role == UserRole.admin and (user is None or user.role != UserRole.admin):
-        raise APIError(403, "forbidden", "Admin access requires pre-assigned admin role")
     if user is None:
-        user = User(telegram_id=telegram_id, role=role, lang=Lang.ru, first_name=first_name)
+        user = User(telegram_id=telegram_id, role=UserRole.client, lang=Lang.ru, first_name=first_name)
         db.add(user)
         await db.flush()
         is_new = True
 
-    if role == UserRole.client:
+    resolved = await _resolve_requested_role(db, user, role)
+
+    if resolved == UserRole.client:
         await get_or_create_client_for_user(db, user)
 
     pp: PartnerProfile | None = None
-    if role == UserRole.partner:
+    if resolved == UserRole.partner:
         pp = await _ensure_partner_profile(db, user)
 
     now = datetime.now(timezone.utc)
@@ -226,10 +276,12 @@ async def dev_login(
     session = Session(
         token=token,
         user_id=user.id,
-        role=role,
+        role=resolved,
         expires_at=now + timedelta(seconds=settings.session_ttl_sec),
     )
     db.add(session)
+    available_roles = await compute_available_roles(db, user)
+    accessible_owners = await _owners_response(db, user)
     await db.commit()
     await db.refresh(user)
     return AuthTgResponse(
@@ -238,12 +290,13 @@ async def dev_login(
         user=AuthTgUser(
             id=user.id,
             telegram_id=user.telegram_id,
-            role=role,
+            role=resolved,
             lang=user.lang,
             first_name=user.first_name,
             is_new=is_new,
-            partner_status=_partner_status(pp) if role == UserRole.partner else None,
+            partner_status=_partner_status(pp) if resolved == UserRole.partner else None,
             is_superadmin=user.is_superadmin,
         ),
-        accessible_owners=await _owners_response(db, user),
+        accessible_owners=accessible_owners,
+        available_roles=available_roles,
     )

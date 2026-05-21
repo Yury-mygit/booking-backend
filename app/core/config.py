@@ -10,6 +10,11 @@ class Settings(BaseSettings):
 
     database_url: str
 
+    # Unified bot — @rforge_stay_bot. Старые role-specific токены оставлены до
+    # Этапа 6 (удаление легасных ботов) — verify_init_data использует их для
+    # backward-compat легасных фронтов, пока они не переехали на единый /auth/tg.
+    tg_bot_username: str = "rforge_stay_bot"
+    tg_bot_token: str = ""
     tg_bot_token_client: str = ""
     tg_bot_token_partner: str = ""
     tg_bot_token_admin: str = ""
@@ -18,6 +23,7 @@ class Settings(BaseSettings):
     session_ttl_sec: int = 60 * 60 * 24 * 30
 
     tg_webhook_secret: str = ""
+    public_base_hub: str = "https://book-hub.raftforge.art/"
     public_base_client: str = "https://book.dev.raftforge.art/"
     public_base_partner: str = "https://book-partner.dev.raftforge.art/"
     public_base_admin: str = "https://book-admin.dev.raftforge.art/"

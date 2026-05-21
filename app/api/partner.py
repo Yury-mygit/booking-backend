@@ -1726,7 +1726,7 @@ def _invite_to_view(inv: PartnerStaffInvite) -> StaffInviteView:
         id=inv.id,
         owner_user_id=inv.owner_user_id,
         token=inv.token,
-        url=f"https://t.me/{settings.tg_bot_username_partner}?startapp=invite_{inv.token}",
+        url=f"https://t.me/{settings.tg_bot_username}?startapp=invite_{inv.token}",
         perms=StaffPerms(
             manage_hotel=inv.perm_manage_hotel,
             manage_rooms=inv.perm_manage_rooms,

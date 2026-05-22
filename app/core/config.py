@@ -10,14 +10,8 @@ class Settings(BaseSettings):
 
     database_url: str
 
-    # Unified bot — @rforge_stay_bot. Старые role-specific токены оставлены до
-    # Этапа 6 (удаление легасных ботов) — verify_init_data использует их для
-    # backward-compat легасных фронтов, пока они не переехали на единый /auth/tg.
     tg_bot_username: str = "rforge_stay_bot"
     tg_bot_token: str = ""
-    tg_bot_token_client: str = ""
-    tg_bot_token_partner: str = ""
-    tg_bot_token_admin: str = ""
 
     tg_init_data_max_age_sec: int = 3600
     session_ttl_sec: int = 60 * 60 * 24 * 30

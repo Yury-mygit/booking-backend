@@ -14,9 +14,6 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TG_BOT_USERNAME=${TG_BOT_USERNAME:-rforge_stay_bot}
       - TG_BOT_TOKEN=${TG_BOT_TOKEN}
-      - TG_BOT_TOKEN_CLIENT=${TG_BOT_TOKEN_CLIENT}
-      - TG_BOT_TOKEN_PARTNER=${TG_BOT_TOKEN_PARTNER}
-      - TG_BOT_TOKEN_ADMIN=${TG_BOT_TOKEN_ADMIN}
       - TG_WEBHOOK_SECRET=${TG_WEBHOOK_SECRET:-}
       - DEV_MODE=${DEV_MODE:-false}
     volumes:

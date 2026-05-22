@@ -108,7 +108,7 @@ def _coerce_lang(language_code: str | None) -> Lang:
 @router.post("/tg", response_model=AuthTgResponse)
 async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) -> AuthTgResponse:
     try:
-        matched_role, tg_user = verify_init_data(payload.init_data)
+        tg_user = verify_init_data(payload.init_data)
     except InitDataError as exc:
         raise APIError(401, "invalid_init_data", str(exc)) from exc
 
@@ -143,7 +143,7 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
         if username and user.username != username:
             user.username = username
 
-    role = await _resolve_requested_role(db, user, payload.requested_role, matched_role)
+    role = await _resolve_requested_role(db, user, payload.requested_role)
 
     if role == UserRole.client:
         # Auto-create a client profile for any TG user. Walk-in (no telegram_id)
@@ -190,21 +190,14 @@ async def _resolve_requested_role(
     db: AsyncSession,
     user: User,
     requested: UserRole | None,
-    legacy_default: UserRole | None = None,
 ) -> UserRole:
     """Determine the role for the new session.
 
-    Order of precedence:
-      1. `requested` if the client sent it.
-      2. `legacy_default` — the role implied by which bot token signed initData
-         (transitional; supports partner/admin fronts before bot consolidation).
-      3. Fallback: client.
-
+    `requested` (sent by the front) wins; falls back to client.
     Admin requires users.role == admin; otherwise 403.
-    Partner is allowed for anyone — the row is the entry into the
-    pending-onboarding flow (admin verifies later).
+    Partner is allowed for anyone — creates a pending PartnerProfile if missing.
     """
-    role = requested or legacy_default or UserRole.client
+    role = requested or UserRole.client
     if role == UserRole.admin and user.role != UserRole.admin:
         raise APIError(403, "forbidden", "Admin access requires pre-assigned admin role")
     return role

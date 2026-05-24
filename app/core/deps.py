@@ -63,10 +63,35 @@ async def current_user(
 
 
 def require_role(*allowed: UserRole):
+    """Variant B (single-app rework, 2026-05-24): authorization идёт по
+    фактическим правам юзера, не по session.role (которое исторически
+    выставлялось через `requested_role` в /auth/tg и теперь не reliable).
+
+    Семантика по аргументам:
+    - `UserRole.client`  — пропускаем любого залогиненного. Все TG-юзеры
+       по дефолту client; «client endpoints» = «for any logged-in user».
+    - `UserRole.admin`   — проверяем `user.role == admin` (БД-факт).
+    - `UserRole.partner` — обычно не используется напрямую: для partner
+       endpoints предпочтительнее `require_partner_or_staff`, которая
+       проверяет ещё и `accessible_owners`.
+    """
+    allowed_set = set(allowed)
+
     async def _dep(ctx: AuthContext = Depends(current_user)) -> AuthContext:
-        if ctx.role not in allowed:
-            raise APIError(403, "forbidden", f"Role {ctx.role.value} not allowed")
-        return ctx
+        if allowed_set == {UserRole.client}:
+            return ctx
+        if UserRole.admin in allowed_set and ctx.user.role == UserRole.admin:
+            return ctx
+        if UserRole.partner in allowed_set:
+            # Backward-compat fallthrough: для редких endpoints, которые
+            # явно gate'или partner. Проверка по user, не session.role.
+            if ctx.user.role == UserRole.partner or ctx.user.role == UserRole.admin:
+                return ctx
+        raise APIError(
+            403,
+            "forbidden",
+            f"Role {ctx.user.role.value} not allowed (required: {','.join(r.value for r in allowed)})",
+        )
 
     return _dep
 
@@ -75,21 +100,30 @@ async def require_partner_or_staff(
     ctx: AuthContext = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AuthContext:
-    """Pass for partner users that have at least one accessible owner
-    (own verified profile OR a staff membership). 403 `partner_pending`
-    otherwise — the FE keeps showing the waiting screen on that code.
+    """Variant B: пропускает любого залогиненного, у кого есть
+    `accessible_owners` — собственный verified profile ИЛИ staff
+    membership. Не проверяет `session.role` (single-token model).
+    Admins тоже автоматически проходят, если они owners.
     """
-    if ctx.role != UserRole.partner:
-        raise APIError(403, "forbidden", f"Role {ctx.role.value} not allowed")
     ctx.accessible_owners = await load_accessible_owners(db, ctx.user)
     if not ctx.accessible_owners:
         raise APIError(
             403,
             "partner_pending",
-            "Partner account is awaiting admin approval",
+            "Partner access requires verified profile or staff membership",
         )
     return ctx
 
 
 # Backwards-compat alias: existing endpoints reference the old name.
 require_verified_partner = require_partner_or_staff
+require_partner_access = require_partner_or_staff  # alias под карту single-app
+
+
+async def require_admin_access(
+    ctx: AuthContext = Depends(current_user),
+) -> AuthContext:
+    """Variant B: admin-only check по `user.role`, не session.role."""
+    if ctx.user.role != UserRole.admin:
+        raise APIError(403, "forbidden", "Admin access required")
+    return ctx

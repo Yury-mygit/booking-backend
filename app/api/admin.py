@@ -181,9 +181,14 @@ async def revoke_partner(
     ctx: AuthContext = Depends(admin_only),
     db: AsyncSession = Depends(get_db),
 ):
-    """Drop partner_profile. Hotels owned by this user stay (FK survives) but
-    require_verified_partner will start returning 403 — the user can reapply
-    via the partner bot, which recreates the profile in pending state."""
+    """Drop partner_profile, reset role to client, kill partner sessions.
+    Hotels owned by this user stay (FK survives) but require_verified_partner
+    will start returning 403 — the user can reapply via the partner bot,
+    which recreates the profile in pending state.
+
+    Без сброса `users.role` и удаления partner-сессий фронт продолжает
+    показывать партнёрскую плашку (по `role` из старой /auth/tg) при том
+    что бэк уже режет доступ. По аналогии с demote_admin."""
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None:
         raise APIError(404, "not_found", "User not found")
@@ -193,6 +198,10 @@ async def revoke_partner(
     if profile is None:
         raise APIError(409, "conflict", "User has no partner profile")
     await db.execute(delete(PartnerProfile).where(PartnerProfile.user_id == user_id))
+    user.role = UserRole.client
+    await db.execute(
+        delete(Session).where(Session.user_id == user_id, Session.role == UserRole.partner)
+    )
     await db.commit()
     await db.refresh(user)
     return _to_admin_user_view(user, verified_at=None, has_profile=False,

@@ -92,6 +92,7 @@ class User(Base):
     is_superadmin: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    qr_image_url: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

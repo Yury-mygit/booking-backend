@@ -16,6 +16,7 @@ services:
       - TG_BOT_TOKEN=${TG_BOT_TOKEN}
       - TG_WEBHOOK_SECRET=${TG_WEBHOOK_SECRET:-}
       - DEV_MODE=${DEV_MODE:-false}
+      - PUBLIC_BASE_APP=${PUBLIC_BASE_APP:-https://book-hub.raftforge.art/}
     volumes:
       - booking_storage:/app/storage
     healthcheck:

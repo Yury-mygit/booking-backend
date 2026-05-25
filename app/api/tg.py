@@ -7,13 +7,17 @@ start_param в hub-WebApp; hub разруливает (роли / hotel_*-deep-l
 history/2026-05-21-booking-single-bot-hub.md). Search-by-name flow клиентского
 бота тоже снят — пользователь ищет отель в самом WebApp.
 """
+import re
+
 import httpx
 from fastapi import APIRouter, Depends, Header, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.exceptions import APIError
+from app.models.models import Hotel
 
 router = APIRouter(prefix="/tg", tags=["telegram-webhook"])
 
@@ -24,6 +28,14 @@ _PROMPT = {
     "ky": "Колдонмону ачуу үчүн баскычты басыңыз:",
     "en": "Tap the button to open the app:",
 }
+_HOTEL_PROMPT = {
+    "ru": "Бронирование отеля\n{hotel}",
+    "ky": "Мейманкананы брондоо\n{hotel}",
+    "en": "Hotel booking\n{hotel}",
+}
+
+# hotel_<slug> либо hotel_<slug>_<ci>_<co>_<guests>
+_HOTEL_SP_RE = re.compile(r"^hotel_(.+?)(?:_\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}_\d+)?$")
 
 
 def _pick_lang(message: dict) -> str:
@@ -31,19 +43,44 @@ def _pick_lang(message: dict) -> str:
     return code if code in ("ru", "ky", "en") else "ru"
 
 
-def _hub_url(start_param: str) -> str:
-    base = settings.public_base_hub.rstrip("/") + "/"
+def _app_url(start_param: str) -> str:
+    base = settings.public_base_app.rstrip("/") + "/"
     if start_param:
         # WebApp URL — query string, не hash (Telegram mobile перетирает hash).
         return f"{base}?startapp={start_param}"
     return base
 
 
+def _hotel_name_by_slug(hotel: Hotel | None, lang: str) -> str | None:
+    if hotel is None:
+        return None
+    if lang == "ky" and hotel.name_ky:
+        return hotel.name_ky
+    if lang == "en" and hotel.name_en:
+        return hotel.name_en
+    return hotel.name_ru
+
+
+async def _build_prompt(db: AsyncSession, start_param: str, lang: str) -> str:
+    """hotel_<slug>[...] → «Бронирование отеля\\n<имя>». Иначе — стандартный."""
+    if start_param:
+        m = _HOTEL_SP_RE.match(start_param)
+        if m:
+            slug = m.group(1)
+            hotel = (
+                await db.execute(select(Hotel).where(Hotel.slug == slug))
+            ).scalar_one_or_none()
+            name = _hotel_name_by_slug(hotel, lang)
+            if name:
+                return _HOTEL_PROMPT[lang].format(hotel=name)
+    return _PROMPT[lang]
+
+
 @router.post("/bot")
 async def tg_webhook(
     request: Request,
     x_secret: str | None = Header(default=None, alias="X-Telegram-Bot-Api-Secret-Token"),
-    db: AsyncSession = Depends(get_db),  # noqa: ARG001 — reserved for future logging hooks
+    db: AsyncSession = Depends(get_db),
 ):
     if settings.tg_webhook_secret:
         if x_secret != settings.tg_webhook_secret:
@@ -70,12 +107,14 @@ async def tg_webhook(
         parts = text.split(maxsplit=1)
         start_param = parts[1].strip() if len(parts) > 1 else ""
 
+    prompt_text = await _build_prompt(db, start_param, lang)
+
     payload = {
         "chat_id": chat_id,
-        "text": _PROMPT[lang],
+        "text": prompt_text,
         "reply_markup": {
             "inline_keyboard": [
-                [{"text": _BUTTON_LABEL[lang], "web_app": {"url": _hub_url(start_param)}}],
+                [{"text": _BUTTON_LABEL[lang], "web_app": {"url": _app_url(start_param)}}],
             ],
         },
     }

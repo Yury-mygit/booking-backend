@@ -35,7 +35,7 @@ app/
 │   ├── client.py       — /c/* (бронирование от лица гостя)
 │   ├── payments.py     — /c/bookings/{code}/pay/* (mock-провайдер)
 │   ├── partner.py      — /p/* (отельер: hotels/rooms/bookings/staff/audit)
-│   ├── admin.py        — /a/* (верификация партнёров, promote/demote)
+│   ├── admin.py        — /admin/* (верификация партнёров, promote/demote)
 │   ├── tg.py           — webhook /tg/bot + bot-команды
 │   ├── uploads.py      — фото отелей/комнат/клиентов
 │   └── qr.py           — /me/qr (платёжный QR владельца)
@@ -68,6 +68,11 @@ curl "https://api.telegram.org/bot$TOKEN/getWebhookInfo"
 
 - **TG WebApp:** `initData` от Telegram → backend проверяет HMAC, выдаёт
   session token. Реализация: `app/core/tg_auth.py`, endpoint `/auth/tg`.
+- **Single-token model:** сессия не носит роли — права считаются
+  per-endpoint по `user.role` (БД-факт) + `accessible_owners`
+  (verified partner_profile ИЛИ staff membership). См.
+  `app/core/deps.py`: `require_role` / `require_partner_or_staff` /
+  `require_admin_access`.
 - **Партнёр:** модель **owner + staff** (`partner_staff`) с 4 perm-флагами
   (`manage_hotel/rooms/bookings/staff`). Сотрудник добавляется по `telegram_id`
   напрямую. `accessible_owners` в `/auth/whoami` → селектор владельца в шапке.

@@ -264,9 +264,6 @@ class Session(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
-    role: Mapped[UserRole] = mapped_column(
-        ENUM(UserRole, name="user_role", create_type=False), nullable=False
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

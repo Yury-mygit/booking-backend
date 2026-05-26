@@ -1,11 +1,11 @@
 """Auth endpoints (/auth/*).
 
 - POST /auth/tg — обмен Telegram initData на session token (HMAC-verify
-  через `tg_auth.verify_init_data`). Variant B (single-app rework
-  2026-05-24): role в сессии больше не определяется параметром
-  `requested_role`; backend выдаёт client-сессию, реальные права
-  считаются per-endpoint через `accessible_owners` + `user.role`.
-- GET  /auth/whoami — user + accessible_owners + nav-флаги.
+  через `tg_auth.verify_init_data`). Single-token model: сессия не
+  носит роли — права считаются per-endpoint через `accessible_owners` +
+  `user.role`.
+- GET  /auth/whoami — user + accessible_owners + available_roles +
+  partner_status (для тех, у кого есть partner_profile).
 - POST /auth/dev-login — bypass для локальной отладки, доступен только
   при `settings.dev_mode=True`; на проде 404 (см. Caddyfile `book.dev`).
 """
@@ -47,26 +47,6 @@ async def _owners_response(db: AsyncSession, user: User) -> list[OwnerAccess]:
         )
         for op in raw.values()
     ]
-
-
-async def _ensure_partner_profile(db: AsyncSession, user: User) -> PartnerProfile:
-    """Create a partner_profiles row for `user` if missing.
-    New rows start with verified_at=NULL (= pending admin approval)."""
-    pp = (
-        await db.execute(
-            select(PartnerProfile).where(PartnerProfile.user_id == user.id)
-        )
-    ).scalar_one_or_none()
-    if pp is not None:
-        return pp
-    pp = PartnerProfile(
-        user_id=user.id,
-        company_name=(user.first_name or "Partner").strip() or "Partner",
-        verified_at=None,
-    )
-    db.add(pp)
-    await db.flush()
-    return pp
 
 
 def _partner_status(pp: PartnerProfile | None) -> str:
@@ -154,23 +134,19 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
         if username and user.username != username:
             user.username = username
 
-    role = await _resolve_requested_role(db, user, payload.requested_role)
+    # Auto-create a client profile for any TG user. Walk-in (no telegram_id)
+    # rows live alongside in the same table; this one is the TG-linked profile.
+    await get_or_create_client_for_user(db, user)
 
-    if role == UserRole.client:
-        # Auto-create a client profile for any TG user. Walk-in (no telegram_id)
-        # rows live alongside in the same table; this one is the TG-linked profile.
-        await get_or_create_client_for_user(db, user)
-
-    pp: PartnerProfile | None = None
-    if role == UserRole.partner:
-        pp = await _ensure_partner_profile(db, user)
+    pp = (
+        await db.execute(select(PartnerProfile).where(PartnerProfile.user_id == user.id))
+    ).scalar_one_or_none()
 
     now = datetime.now(timezone.utc)
     token = secrets.token_urlsafe(32)
     session = Session(
         token=token,
         user_id=user.id,
-        role=role,
         expires_at=now + timedelta(seconds=settings.session_ttl_sec),
     )
     db.add(session)
@@ -185,11 +161,11 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
         user=AuthTgUser(
             id=user.id,
             telegram_id=user.telegram_id,
-            role=role,
+            role=user.role,
             lang=user.lang,
             first_name=user.first_name,
             is_new=is_new,
-            partner_status=_partner_status(pp) if role == UserRole.partner else None,
+            partner_status=_partner_status(pp) if pp is not None else None,
             is_superadmin=user.is_superadmin,
         ),
         accessible_owners=accessible_owners,
@@ -197,42 +173,23 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
     )
 
 
-async def _resolve_requested_role(
-    db: AsyncSession,
-    user: User,
-    requested: UserRole | None,
-) -> UserRole:
-    """Determine the role for the new session.
-
-    `requested` (sent by the front) wins; falls back to client.
-    Admin requires users.role == admin; otherwise 403.
-    Partner is allowed for anyone — creates a pending PartnerProfile if missing.
-    """
-    role = requested or UserRole.client
-    if role == UserRole.admin and user.role != UserRole.admin:
-        raise APIError(403, "forbidden", "Admin access requires pre-assigned admin role")
-    return role
-
-
 @router.get("/whoami")
 async def whoami(
     ctx: AuthContext = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    partner_status: str | None = None
-    if ctx.role == UserRole.partner:
-        pp = (
-            await db.execute(
-                select(PartnerProfile).where(PartnerProfile.user_id == ctx.user.id)
-            )
-        ).scalar_one_or_none()
-        partner_status = _partner_status(pp)
+    pp = (
+        await db.execute(
+            select(PartnerProfile).where(PartnerProfile.user_id == ctx.user.id)
+        )
+    ).scalar_one_or_none()
+    partner_status = _partner_status(pp) if pp is not None else None
     accessible_owners = await _owners_response(db, ctx.user)
     available_roles = await compute_available_roles(db, ctx.user)
     return {
         "user_id": ctx.user.id,
         "telegram_id": ctx.user.telegram_id,
-        "role": ctx.role.value,
+        "role": ctx.user.role.value,
         "lang": ctx.user.lang.value,
         "first_name": ctx.user.first_name,
         "session_expires_at": ctx.session.expires_at.isoformat(),
@@ -247,7 +204,6 @@ async def whoami(
 async def dev_login(
     telegram_id: int,
     first_name: str = "DevUser",
-    role: UserRole = UserRole.client,
     db: AsyncSession = Depends(get_db),
 ) -> AuthTgResponse:
     """Bypass Telegram initData — only enabled when DEV_MODE=true.
@@ -266,21 +222,17 @@ async def dev_login(
         await db.flush()
         is_new = True
 
-    resolved = await _resolve_requested_role(db, user, role)
+    await get_or_create_client_for_user(db, user)
 
-    if resolved == UserRole.client:
-        await get_or_create_client_for_user(db, user)
-
-    pp: PartnerProfile | None = None
-    if resolved == UserRole.partner:
-        pp = await _ensure_partner_profile(db, user)
+    pp = (
+        await db.execute(select(PartnerProfile).where(PartnerProfile.user_id == user.id))
+    ).scalar_one_or_none()
 
     now = datetime.now(timezone.utc)
     token = secrets.token_urlsafe(32)
     session = Session(
         token=token,
         user_id=user.id,
-        role=resolved,
         expires_at=now + timedelta(seconds=settings.session_ttl_sec),
     )
     db.add(session)
@@ -294,11 +246,11 @@ async def dev_login(
         user=AuthTgUser(
             id=user.id,
             telegram_id=user.telegram_id,
-            role=resolved,
+            role=user.role,
             lang=user.lang,
             first_name=user.first_name,
             is_new=is_new,
-            partner_status=_partner_status(pp) if resolved == UserRole.partner else None,
+            partner_status=_partner_status(pp) if pp is not None else None,
             is_superadmin=user.is_superadmin,
         ),
         accessible_owners=accessible_owners,

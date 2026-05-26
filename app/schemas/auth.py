@@ -8,7 +8,6 @@ from app.schemas.partner import OwnerAccess
 
 class AuthTgRequest(BaseModel):
     init_data: str = Field(min_length=1)
-    requested_role: UserRole | None = None
 
 
 class AuthTgUser(BaseModel):

@@ -19,7 +19,6 @@ class AuthContext:
     ) -> None:
         self.user = user
         self.session = session
-        self.role: UserRole = session.role
         self.accessible_owners: dict[int, OwnerPerms] = accessible_owners or {}
 
 
@@ -63,14 +62,12 @@ async def current_user(
 
 
 def require_role(*allowed: UserRole):
-    """Variant B (single-app rework, 2026-05-24): authorization идёт по
-    фактическим правам юзера, не по session.role (которое исторически
-    выставлялось через `requested_role` в /auth/tg и теперь не reliable).
+    """Authorization по `user.role` (БД-факт), без учёта сессии.
 
     Семантика по аргументам:
-    - `UserRole.client`  — пропускаем любого залогиненного. Все TG-юзеры
-       по дефолту client; «client endpoints» = «for any logged-in user».
-    - `UserRole.admin`   — проверяем `user.role == admin` (БД-факт).
+    - `UserRole.client`  — пропускаем любого залогиненного. «Client endpoints» =
+      «for any logged-in user».
+    - `UserRole.admin`   — проверяем `user.role == admin`.
     - `UserRole.partner` — обычно не используется напрямую: для partner
        endpoints предпочтительнее `require_partner_or_staff`, которая
        проверяет ещё и `accessible_owners`.
@@ -83,8 +80,6 @@ def require_role(*allowed: UserRole):
         if UserRole.admin in allowed_set and ctx.user.role == UserRole.admin:
             return ctx
         if UserRole.partner in allowed_set:
-            # Backward-compat fallthrough: для редких endpoints, которые
-            # явно gate'или partner. Проверка по user, не session.role.
             if ctx.user.role == UserRole.partner or ctx.user.role == UserRole.admin:
                 return ctx
         raise APIError(
@@ -100,10 +95,9 @@ async def require_partner_or_staff(
     ctx: AuthContext = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AuthContext:
-    """Variant B: пропускает любого залогиненного, у кого есть
-    `accessible_owners` — собственный verified profile ИЛИ staff
-    membership. Не проверяет `session.role` (single-token model).
-    Admins тоже автоматически проходят, если они owners.
+    """Пропускает любого залогиненного, у кого есть `accessible_owners` —
+    собственный verified profile ИЛИ staff membership. Admins тоже
+    автоматически проходят, если они owners.
     """
     ctx.accessible_owners = await load_accessible_owners(db, ctx.user)
     if not ctx.accessible_owners:
@@ -115,15 +109,14 @@ async def require_partner_or_staff(
     return ctx
 
 
-# Backwards-compat alias: existing endpoints reference the old name.
 require_verified_partner = require_partner_or_staff
-require_partner_access = require_partner_or_staff  # alias под карту single-app
+require_partner_access = require_partner_or_staff
 
 
 async def require_admin_access(
     ctx: AuthContext = Depends(current_user),
 ) -> AuthContext:
-    """Variant B: admin-only check по `user.role`, не session.role."""
+    """Admin-only check по `user.role`."""
     if ctx.user.role != UserRole.admin:
         raise APIError(403, "forbidden", "Admin access required")
     return ctx

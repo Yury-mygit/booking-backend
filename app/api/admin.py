@@ -210,9 +210,7 @@ async def revoke_partner(
         raise APIError(409, "conflict", "User has no partner profile")
     await db.execute(delete(PartnerProfile).where(PartnerProfile.user_id == user_id))
     user.role = UserRole.client
-    await db.execute(
-        delete(Session).where(Session.user_id == user_id, Session.role == UserRole.partner)
-    )
+    await db.execute(delete(Session).where(Session.user_id == user_id))
     await db.commit()
     await db.refresh(user)
     return _to_admin_user_view(user, verified_at=None, has_profile=False,
@@ -240,9 +238,7 @@ async def demote_admin(
         await db.execute(select(PartnerProfile).where(PartnerProfile.user_id == user_id))
     ).scalar_one_or_none()
     user.role = UserRole.partner if profile is not None else UserRole.client
-    await db.execute(
-        delete(Session).where(Session.user_id == user_id, Session.role == UserRole.admin)
-    )
+    await db.execute(delete(Session).where(Session.user_id == user_id))
     await db.commit()
     await db.refresh(user)
     return _to_admin_user_view(

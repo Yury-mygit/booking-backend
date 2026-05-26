@@ -49,31 +49,6 @@ admin_only = require_role(UserRole.admin)
 
 # ─── Users ─────────────────────────────────────────────────────────────────
 
-def _to_admin_user_view(
-    u: User,
-    verified_at,
-    has_profile: bool,
-    hotels_count: int,
-    bookings_count: int,
-) -> AdminUserView:
-    return AdminUserView(
-        id=u.id,
-        telegram_id=u.telegram_id,
-        role=u.role,
-        first_name=u.first_name,
-        last_name=u.last_name,
-        username=u.username,
-        phone=u.phone,
-        email=u.email,
-        created_at=u.created_at,
-        is_verified_partner=verified_at is not None,
-        is_pending_partner=has_profile and verified_at is None,
-        is_superadmin=u.is_superadmin,
-        hotels_count=hotels_count,
-        bookings_count=bookings_count,
-    )
-
-
 @router.get("/users", response_model=list[AdminUserView])
 async def list_users(
     role: UserRole | None = Query(default=None),
@@ -123,12 +98,12 @@ async def list_users(
 
     rows = (await db.execute(stmt)).all()
     return [
-        _to_admin_user_view(
+        AdminUserView.from_model(
             u,
-            verified_at,
-            pp_uid is not None,
-            hcnt or 0,
-            bcnt or 0,
+            verified_at=verified_at,
+            has_profile=pp_uid is not None,
+            hotels_count=hcnt or 0,
+            bookings_count=bcnt or 0,
         )
         for u, pp_uid, verified_at, hcnt, bcnt in rows
     ]
@@ -167,7 +142,7 @@ async def verify_partner(
         profile.verified_at = now
     await db.commit()
 
-    return _to_admin_user_view(user, verified_at=now, has_profile=True,
+    return AdminUserView.from_model(user, verified_at=now, has_profile=True,
                                 hotels_count=0, bookings_count=0)
 
 
@@ -182,7 +157,7 @@ async def promote_admin(
         raise APIError(404, "not_found", "User not found")
     user.role = UserRole.admin
     await db.commit()
-    return _to_admin_user_view(user, verified_at=None, has_profile=False,
+    return AdminUserView.from_model(user, verified_at=None, has_profile=False,
                                 hotels_count=0, bookings_count=0)
 
 
@@ -213,7 +188,7 @@ async def revoke_partner(
     await db.execute(delete(Session).where(Session.user_id == user_id))
     await db.commit()
     await db.refresh(user)
-    return _to_admin_user_view(user, verified_at=None, has_profile=False,
+    return AdminUserView.from_model(user, verified_at=None, has_profile=False,
                                 hotels_count=0, bookings_count=0)
 
 
@@ -241,7 +216,7 @@ async def demote_admin(
     await db.execute(delete(Session).where(Session.user_id == user_id))
     await db.commit()
     await db.refresh(user)
-    return _to_admin_user_view(
+    return AdminUserView.from_model(
         user,
         verified_at=profile.verified_at if profile is not None else None,
         has_profile=profile is not None,

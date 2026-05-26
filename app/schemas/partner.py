@@ -2,7 +2,20 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
-from app.models.models import AvailabilityStatus, BookingStatus, DocKind, HotelStatus
+from app.models.models import (
+    AvailabilityStatus,
+    Booking,
+    BookingStatus,
+    Client,
+    DocKind,
+    Hotel,
+    HotelService,
+    HotelStatus,
+    PartnerStaff,
+    PartnerStaffInvite,
+    Room,
+    User,
+)
 
 
 class HotelCreate(BaseModel):
@@ -81,6 +94,28 @@ class HotelPartnerView(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @classmethod
+    def from_model(cls, h: Hotel) -> "HotelPartnerView":
+        return cls(
+            id=h.id,
+            slug=h.slug,
+            name_ru=h.name_ru,
+            name_ky=h.name_ky,
+            name_en=h.name_en,
+            description_ru=h.description_ru,
+            description_ky=h.description_ky,
+            description_en=h.description_en,
+            city=h.city,
+            address=h.address,
+            lat=float(h.lat) if h.lat is not None else None,
+            lng=float(h.lng) if h.lng is not None else None,
+            photos=h.photos or [],
+            status=h.status,
+            published_at=h.published_at,
+            created_at=h.created_at,
+            updated_at=h.updated_at,
+        )
+
 
 class RoomCreate(BaseModel):
     name_ru: str = Field(min_length=1, max_length=256)
@@ -126,6 +161,25 @@ class RoomPartnerView(BaseModel):
     photos: list[str]
     created_at: datetime
 
+    @classmethod
+    def from_model(cls, r: Room) -> "RoomPartnerView":
+        return cls(
+            id=r.id,
+            hotel_id=r.hotel_id,
+            name_ru=r.name_ru,
+            name_ky=r.name_ky,
+            name_en=r.name_en,
+            description_ru=r.description_ru,
+            description_ky=r.description_ky,
+            description_en=r.description_en,
+            capacity=r.capacity,
+            price_kgs=r.price_kgs,
+            floor=r.floor,
+            beds=r.beds,
+            photos=r.photos or [],
+            created_at=r.created_at,
+        )
+
 
 class AvailabilityRowIn(BaseModel):
     date: date
@@ -166,6 +220,18 @@ class ServicePartnerView(BaseModel):
     price_kgs: int | None
     created_at: datetime
 
+    @classmethod
+    def from_model(cls, s: HotelService) -> "ServicePartnerView":
+        return cls(
+            id=s.id,
+            hotel_id=s.hotel_id,
+            name_ru=s.name_ru,
+            name_ky=s.name_ky,
+            name_en=s.name_en,
+            price_kgs=s.price_kgs,
+            created_at=s.created_at,
+        )
+
 
 class PartnerBookingView(BaseModel):
     id: int
@@ -183,6 +249,28 @@ class PartnerBookingView(BaseModel):
     postpay: bool
     confirmed: bool
     created_at: datetime
+
+    @classmethod
+    def from_model(
+        cls, b: Booking, r: Room, h: Hotel, c: Client
+    ) -> "PartnerBookingView":
+        return cls(
+            id=b.id,
+            code=b.code,
+            room_id=r.id,
+            room_name_ru=r.name_ru,
+            hotel_id=h.id,
+            hotel_name_ru=h.name_ru,
+            client_first_name=c.first_name,
+            check_in=b.check_in,
+            check_out=b.check_out,
+            guests=b.guests,
+            total_kgs=b.total_kgs,
+            status=b.status,
+            postpay=b.postpay,
+            confirmed=b.confirmed,
+            created_at=b.created_at,
+        )
 
 
 class PartnerBookingPostpaySet(BaseModel):
@@ -215,6 +303,29 @@ class ClientPartnerView(BaseModel):
     bookings_count: int
     last_booking_date: date | None
     created_at: datetime
+
+    @classmethod
+    def from_model(
+        cls,
+        c: Client,
+        *,
+        bookings_count: int = 0,
+        last_booking_date: date | None = None,
+    ) -> "ClientPartnerView":
+        return cls(
+            id=c.id,
+            user_id=c.user_id,
+            first_name=c.first_name,
+            last_name=c.last_name,
+            phone=c.phone,
+            email=c.email,
+            doc_kind=c.doc_kind,
+            doc_number=c.doc_number,
+            photo_url=c.photo_url,
+            bookings_count=bookings_count,
+            last_booking_date=last_booking_date,
+            created_at=c.created_at,
+        )
 
 
 class ClientUpdate(BaseModel):
@@ -253,6 +364,16 @@ class StaffPerms(BaseModel):
     manage_bookings: bool = True
     manage_staff: bool = False
 
+    @classmethod
+    def from_model(cls, obj: PartnerStaff | PartnerStaffInvite) -> "StaffPerms":
+        """Принимает любую модель с perm_manage_* атрибутами."""
+        return cls(
+            manage_hotel=obj.perm_manage_hotel,
+            manage_rooms=obj.perm_manage_rooms,
+            manage_bookings=obj.perm_manage_bookings,
+            manage_staff=obj.perm_manage_staff,
+        )
+
 
 class OwnerAccess(BaseModel):
     owner_user_id: int
@@ -282,6 +403,19 @@ class StaffView(BaseModel):
     note: str | None
     created_at: datetime
 
+    @classmethod
+    def from_model(cls, ps: PartnerStaff, staff_user: User) -> "StaffView":
+        return cls(
+            id=ps.id,
+            owner_user_id=ps.owner_user_id,
+            staff_user_id=ps.staff_user_id,
+            staff_telegram_id=staff_user.telegram_id,
+            staff_display_name=staff_user.first_name,
+            perms=StaffPerms.from_model(ps),
+            note=ps.note,
+            created_at=ps.created_at,
+        )
+
 
 # ─── Staff invite (внешние ссылки) ──────────────────────────────────────
 
@@ -301,6 +435,21 @@ class StaffInviteView(BaseModel):
     expires_at: datetime
     used_at: datetime | None
     created_at: datetime
+
+    @classmethod
+    def from_model(cls, inv: PartnerStaffInvite) -> "StaffInviteView":
+        from app.core.config import settings
+        return cls(
+            id=inv.id,
+            owner_user_id=inv.owner_user_id,
+            token=inv.token,
+            url=f"https://t.me/{settings.tg_bot_username}?startapp=invite_{inv.token}",
+            perms=StaffPerms.from_model(inv),
+            note=inv.note,
+            expires_at=inv.expires_at,
+            used_at=inv.used_at,
+            created_at=inv.created_at,
+        )
 
 
 class StaffInviteAccept(BaseModel):

@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel
 
-from app.models.models import BookingStatus, HotelStatus, UserRole
+from app.models.models import BookingStatus, HotelStatus, User, UserRole
 
 
 class AdminUserView(BaseModel):
@@ -20,6 +20,33 @@ class AdminUserView(BaseModel):
     is_superadmin: bool
     hotels_count: int
     bookings_count: int            # bookings made as a client (via clients.user_id)
+
+    @classmethod
+    def from_model(
+        cls,
+        u: User,
+        *,
+        verified_at: datetime | None,
+        has_profile: bool,
+        hotels_count: int,
+        bookings_count: int,
+    ) -> "AdminUserView":
+        return cls(
+            id=u.id,
+            telegram_id=u.telegram_id,
+            role=u.role,
+            first_name=u.first_name,
+            last_name=u.last_name,
+            username=u.username,
+            phone=u.phone,
+            email=u.email,
+            created_at=u.created_at,
+            is_verified_partner=verified_at is not None,
+            is_pending_partner=has_profile and verified_at is None,
+            is_superadmin=u.is_superadmin,
+            hotels_count=hotels_count,
+            bookings_count=bookings_count,
+        )
 
 
 class AdminHotelView(BaseModel):

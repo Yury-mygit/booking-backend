@@ -90,47 +90,6 @@ from app.utils import (
 router = APIRouter(prefix="/p", tags=["partner"])
 
 
-def _to_hotel_view(h: Hotel) -> HotelPartnerView:
-    return HotelPartnerView(
-        id=h.id,
-        slug=h.slug,
-        name_ru=h.name_ru,
-        name_ky=h.name_ky,
-        name_en=h.name_en,
-        description_ru=h.description_ru,
-        description_ky=h.description_ky,
-        description_en=h.description_en,
-        city=h.city,
-        address=h.address,
-        lat=float(h.lat) if h.lat is not None else None,
-        lng=float(h.lng) if h.lng is not None else None,
-        photos=h.photos or [],
-        status=h.status,
-        published_at=h.published_at,
-        created_at=h.created_at,
-        updated_at=h.updated_at,
-    )
-
-
-def _to_room_view(r: Room) -> RoomPartnerView:
-    return RoomPartnerView(
-        id=r.id,
-        hotel_id=r.hotel_id,
-        name_ru=r.name_ru,
-        name_ky=r.name_ky,
-        name_en=r.name_en,
-        description_ru=r.description_ru,
-        description_ky=r.description_ky,
-        description_en=r.description_en,
-        capacity=r.capacity,
-        price_kgs=r.price_kgs,
-        floor=r.floor,
-        beds=r.beds,
-        photos=r.photos or [],
-        created_at=r.created_at,
-    )
-
-
 # ─── Hotels ────────────────────────────────────────────────────────────────
 
 @router.get("/hotels", response_model=list[HotelPartnerView])
@@ -151,7 +110,7 @@ async def list_my_hotels(
         .scalars()
         .all()
     )
-    return [_to_hotel_view(h) for h in rows]
+    return [HotelPartnerView.from_model(h) for h in rows]
 
 
 @router.post("/hotels", response_model=HotelPartnerView, status_code=201)
@@ -193,7 +152,7 @@ async def create_hotel(
         subject_id=h.id,
         payload={"name_ru": h.name_ru, "city": h.city},
     )
-    return _to_hotel_view(h)
+    return HotelPartnerView.from_model(h)
 
 
 @router.get("/hotels/{hotel_id}", response_model=HotelPartnerView)
@@ -202,7 +161,7 @@ async def get_my_hotel(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    return _to_hotel_view(await scope.get_my_hotel(db, ctx, hotel_id))
+    return HotelPartnerView.from_model(await scope.get_my_hotel(db, ctx, hotel_id))
 
 
 @router.get("/hotels/{hotel_id}/dashboard", response_model=HotelDashboard)
@@ -410,7 +369,7 @@ async def update_hotel(
         subject_id=h.id,
         payload={"changed_fields": list(data.keys())},
     )
-    return _to_hotel_view(h)
+    return HotelPartnerView.from_model(h)
 
 
 @router.delete("/hotels/{hotel_id}", status_code=204)
@@ -474,7 +433,7 @@ async def list_rooms(
         .scalars()
         .all()
     )
-    return [_to_room_view(r) for r in rows]
+    return [RoomPartnerView.from_model(r) for r in rows]
 
 
 @router.post("/hotels/{hotel_id}/rooms", response_model=RoomPartnerView, status_code=201)
@@ -497,7 +456,7 @@ async def create_room(
         subject_id=r.id,
         payload={"hotel_id": hotel_id, "name_ru": r.name_ru, "capacity": r.capacity, "price_kgs": r.price_kgs},
     )
-    return _to_room_view(r)
+    return RoomPartnerView.from_model(r)
 
 
 @router.get("/hotels/{hotel_id}/rooms/{room_id}", response_model=RoomPartnerView)
@@ -507,7 +466,7 @@ async def get_room(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    return _to_room_view(await scope.get_my_room(db, ctx, room_id, hotel_id=hotel_id))
+    return RoomPartnerView.from_model(await scope.get_my_room(db, ctx, room_id, hotel_id=hotel_id))
 
 
 async def _room_has_active_bookings(db: AsyncSession, room_id: int) -> bool:
@@ -557,7 +516,7 @@ async def update_room(
         subject_id=r.id,
         payload={"hotel_id": hotel_id, "changed_fields": list(data.keys())},
     )
-    return _to_room_view(r)
+    return RoomPartnerView.from_model(r)
 
 
 @router.delete("/hotels/{hotel_id}/rooms/{room_id}", status_code=204)
@@ -733,18 +692,6 @@ async def update_availability(
 
 # ─── Services ──────────────────────────────────────────────────────────────
 
-def _to_service_view(s: HotelService) -> ServicePartnerView:
-    return ServicePartnerView(
-        id=s.id,
-        hotel_id=s.hotel_id,
-        name_ru=s.name_ru,
-        name_ky=s.name_ky,
-        name_en=s.name_en,
-        price_kgs=s.price_kgs,
-        created_at=s.created_at,
-    )
-
-
 @router.get("/hotels/{hotel_id}/services", response_model=list[ServicePartnerView])
 async def list_services(
     hotel_id: int,
@@ -761,7 +708,7 @@ async def list_services(
         .scalars()
         .all()
     )
-    return [_to_service_view(s) for s in rows]
+    return [ServicePartnerView.from_model(s) for s in rows]
 
 
 @router.post("/hotels/{hotel_id}/services", response_model=ServicePartnerView, status_code=201)
@@ -784,7 +731,7 @@ async def create_service(
         subject_id=s.id,
         payload={"hotel_id": hotel_id, "name_ru": s.name_ru},
     )
-    return _to_service_view(s)
+    return ServicePartnerView.from_model(s)
 
 
 @router.put("/hotels/{hotel_id}/services/{service_id}", response_model=ServicePartnerView)
@@ -812,7 +759,7 @@ async def update_service(
         subject_id=s.id,
         payload={"hotel_id": hotel_id, "changed_fields": list(data.keys())},
     )
-    return _to_service_view(s)
+    return ServicePartnerView.from_model(s)
 
 
 @router.delete("/hotels/{hotel_id}/services/{service_id}", status_code=204)
@@ -868,27 +815,7 @@ async def list_incoming_bookings(
         stmt = stmt.where(Hotel.id == hotel_id)
 
     rows = (await db.execute(stmt)).all()
-    return [_to_partner_booking(b, r, h, c) for b, r, h, c in rows]
-
-
-def _to_partner_booking(b: Booking, r: Room, h: Hotel, c: Client) -> PartnerBookingView:
-    return PartnerBookingView(
-        id=b.id,
-        code=b.code,
-        room_id=r.id,
-        room_name_ru=r.name_ru,
-        hotel_id=h.id,
-        hotel_name_ru=h.name_ru,
-        client_first_name=c.first_name,
-        check_in=b.check_in,
-        check_out=b.check_out,
-        guests=b.guests,
-        total_kgs=b.total_kgs,
-        status=b.status,
-        postpay=b.postpay,
-        confirmed=b.confirmed,
-        created_at=b.created_at,
-    )
+    return [PartnerBookingView.from_model(b, r, h, c) for b, r, h, c in rows]
 
 
 @router.post("/bookings/{code}/confirm", response_model=PartnerBookingView)
@@ -918,7 +845,7 @@ async def confirm_booking(
         subject_id=b.id,
         payload={"code": b.code, "hotel_id": hotel_id_for_pub},
     )
-    return _to_partner_booking(b, r, h, c)
+    return PartnerBookingView.from_model(b, r, h, c)
 
 
 @router.post("/bookings/{code}/mark-paid", response_model=PartnerBookingView)
@@ -954,7 +881,7 @@ async def mark_paid(
         subject_id=b.id,
         payload={"code": b.code, "hotel_id": hotel_id_for_pub},
     )
-    return _to_partner_booking(b, r, h, c)
+    return PartnerBookingView.from_model(b, r, h, c)
 
 
 @router.post("/bookings/{code}/postpay", response_model=PartnerBookingView)
@@ -983,7 +910,7 @@ async def set_postpay(
         subject_id=b.id,
         payload={"code": b.code, "postpay": b.postpay},
     )
-    return _to_partner_booking(b, r, h, c)
+    return PartnerBookingView.from_model(b, r, h, c)
 
 
 @router.post("/bookings/{code}/cancel", response_model=PartnerBookingView)
@@ -1036,7 +963,7 @@ async def cancel_booking(
         subject_id=b.id,
         payload={"code": b.code, "hotel_id": hotel_id_for_pub},
     )
-    return _to_partner_booking(b, r, h, c)
+    return PartnerBookingView.from_model(b, r, h, c)
 
 
 # ─── Walk-in bookings ─────────────────────────────────────────────────────
@@ -1181,7 +1108,7 @@ async def create_walkin_booking(
             "total_kgs": booking.total_kgs,
         },
     )
-    return _to_partner_booking(booking, room, hotel, client)
+    return PartnerBookingView.from_model(booking, room, hotel, client)
 
 
 # ─── /p/rooms (flat list with today_status) ────────────────────────────────
@@ -1234,23 +1161,6 @@ async def list_all_my_rooms(
 
 # ─── /p/clients ────────────────────────────────────────────────────────────
 
-def _to_client_view(c: Client, bookings_count: int, last_date: date | None) -> ClientPartnerView:
-    return ClientPartnerView(
-        id=c.id,
-        user_id=c.user_id,
-        first_name=c.first_name,
-        last_name=c.last_name,
-        phone=c.phone,
-        email=c.email,
-        doc_kind=c.doc_kind,
-        doc_number=c.doc_number,
-        photo_url=c.photo_url,
-        bookings_count=bookings_count,
-        last_booking_date=last_date,
-        created_at=c.created_at,
-    )
-
-
 @router.get("/clients", response_model=list[ClientPartnerView])
 async def list_my_clients(
     owner_id: int | None = Query(default=None),
@@ -1276,7 +1186,7 @@ async def list_my_clients(
         .limit(500)
     )
     rows = (await db.execute(stmt)).all()
-    return [_to_client_view(c, cnt, last) for (c, cnt, last) in rows]
+    return [ClientPartnerView.from_model(c, bookings_count=cnt, last_booking_date=last) for (c, cnt, last) in rows]
 
 
 @router.post("/clients/lookup", response_model=ClientPartnerView | None)
@@ -1299,7 +1209,7 @@ async def lookup_client(
         c = (await db.execute(select(Client).where(Client.email == norm_email))).scalar_one_or_none()
     if c is None:
         return None
-    return _to_client_view(c, bookings_count=0, last_date=None)
+    return ClientPartnerView.from_model(c, bookings_count=0, last_booking_date=None)
 
 
 @router.get("/clients/{client_id}", response_model=ClientPartnerView)
@@ -1319,7 +1229,7 @@ async def get_my_client(
             .where(Booking.client_id == c.id, Hotel.owner_user_id.in_(accessible_ids))
         )
     ).one()
-    return _to_client_view(c, cnt or 0, last)
+    return ClientPartnerView.from_model(c, bookings_count=cnt or 0, last_booking_date=last)
 
 
 @router.get("/clients/{client_id}/bookings", response_model=list[PartnerBookingView])
@@ -1339,7 +1249,7 @@ async def list_my_client_bookings(
             .order_by(Booking.created_at.desc())
         )
     ).all()
-    return [_to_partner_booking(b, r, h, c) for (b, r, h) in rows]
+    return [PartnerBookingView.from_model(b, r, h, c) for (b, r, h) in rows]
 
 
 @router.put("/clients/{client_id}", response_model=ClientPartnerView)
@@ -1387,32 +1297,10 @@ async def update_my_client(
         subject_id=c.id,
         payload=data,
     )
-    return _to_client_view(c, bookings_count=0, last_date=None)
+    return ClientPartnerView.from_model(c, bookings_count=0, last_booking_date=None)
 
 
 # ─── Staff ────────────────────────────────────────────────────────────────
-
-def _ps_to_perms(ps: PartnerStaff) -> StaffPerms:
-    return StaffPerms(
-        manage_hotel=ps.perm_manage_hotel,
-        manage_rooms=ps.perm_manage_rooms,
-        manage_bookings=ps.perm_manage_bookings,
-        manage_staff=ps.perm_manage_staff,
-    )
-
-
-def _ps_to_view(ps: PartnerStaff, staff_user: User) -> StaffView:
-    return StaffView(
-        id=ps.id,
-        owner_user_id=ps.owner_user_id,
-        staff_user_id=ps.staff_user_id,
-        staff_telegram_id=staff_user.telegram_id,
-        staff_display_name=staff_user.first_name,
-        perms=_ps_to_perms(ps),
-        note=ps.note,
-        created_at=ps.created_at,
-    )
-
 
 @router.get("/staff", response_model=list[StaffView])
 async def list_staff(
@@ -1441,7 +1329,7 @@ async def list_staff(
             .order_by(PartnerStaff.created_at.desc())
         )
     ).all()
-    return [_ps_to_view(ps, u) for (ps, u) in rows]
+    return [StaffView.from_model(ps, u) for (ps, u) in rows]
 
 
 @router.post("/staff", response_model=StaffView, status_code=201)
@@ -1521,7 +1409,7 @@ async def add_staff(
             "note": payload.note,
         },
     )
-    return _ps_to_view(ps, staff_user)
+    return StaffView.from_model(ps, staff_user)
 
 
 @router.put("/staff/{staff_id}", response_model=StaffView)
@@ -1549,7 +1437,7 @@ async def update_staff(
 
     diff: dict = {}
     if payload.perms is not None:
-        before = _ps_to_perms(ps).model_dump()
+        before = StaffPerms.from_model(ps).model_dump()
         ps.perm_manage_hotel = payload.perms.manage_hotel
         ps.perm_manage_rooms = payload.perms.manage_rooms
         ps.perm_manage_bookings = payload.perms.manage_bookings
@@ -1571,7 +1459,7 @@ async def update_staff(
             subject_id=ps.id,
             payload=diff,
         )
-    return _ps_to_view(ps, staff_user)
+    return StaffView.from_model(ps, staff_user)
 
 
 @router.delete("/staff/{staff_id}", status_code=204)
@@ -1594,7 +1482,7 @@ async def remove_staff(
     owner_id = ps.owner_user_id
     snapshot = {
         "staff_user_id": ps.staff_user_id,
-        "perms": _ps_to_perms(ps).model_dump(),
+        "perms": StaffPerms.from_model(ps).model_dump(),
         "note": ps.note,
     }
     await db.delete(ps)
@@ -1611,25 +1499,6 @@ async def remove_staff(
 
 
 # ─── Staff invite (внешние ссылки) ────────────────────────────────────────
-
-def _invite_to_view(inv: PartnerStaffInvite) -> StaffInviteView:
-    return StaffInviteView(
-        id=inv.id,
-        owner_user_id=inv.owner_user_id,
-        token=inv.token,
-        url=f"https://t.me/{settings.tg_bot_username}?startapp=invite_{inv.token}",
-        perms=StaffPerms(
-            manage_hotel=inv.perm_manage_hotel,
-            manage_rooms=inv.perm_manage_rooms,
-            manage_bookings=inv.perm_manage_bookings,
-            manage_staff=inv.perm_manage_staff,
-        ),
-        note=inv.note,
-        expires_at=inv.expires_at,
-        used_at=inv.used_at,
-        created_at=inv.created_at,
-    )
-
 
 @router.post("/staff/invites", response_model=StaffInviteView, status_code=201)
 async def create_staff_invite(
@@ -1677,7 +1546,7 @@ async def create_staff_invite(
             "note": payload.note,
         },
     )
-    return _invite_to_view(inv)
+    return StaffInviteView.from_model(inv)
 
 
 @router.get("/staff/invites", response_model=list[StaffInviteView])
@@ -1704,7 +1573,7 @@ async def list_staff_invites(
             .order_by(PartnerStaffInvite.created_at.desc())
         )
     ).scalars().all()
-    return [_invite_to_view(r) for r in rows]
+    return [StaffInviteView.from_model(r) for r in rows]
 
 
 @router.delete("/staff/invites/{invite_id}", status_code=204)
@@ -1817,7 +1686,7 @@ async def accept_staff_invite(
         },
     ))
     await db.commit()
-    return _ps_to_view(ps, ctx.user)
+    return StaffView.from_model(ps, ctx.user)
 
 
 # ─── Audit log read ───────────────────────────────────────────────────────

@@ -17,13 +17,9 @@ class Settings(BaseSettings):
     session_ttl_sec: int = 60 * 60 * 24 * 30
 
     tg_webhook_secret: str = ""
-    # URL для inline-кнопки «Начать» в TG-боте. После cutover (Этап 9 single-app
-    # rework) перейдёт на https://book.dev.raftforge.art/. До тех пор — book-hub
-    # backward-compat. Переопределяется через env PUBLIC_BASE_APP.
-    public_base_app: str = "https://book-hub.raftforge.art/"
-    public_base_client: str = "https://book.dev.raftforge.art/"
-    public_base_partner: str = "https://book-partner.dev.raftforge.art/"
-    public_base_admin: str = "https://book-admin.dev.raftforge.art/"
+    # URL для inline-кнопки «Начать» в TG-боте и deep-link'ов.
+    # Переопределяется через env PUBLIC_BASE_APP.
+    public_base_app: str = "https://book.dev.raftforge.art/"
 
     dev_mode: bool = False
 

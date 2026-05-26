@@ -29,30 +29,56 @@ app/
 ├── api/
 │   ├── router.py       — собирает /api/v1/* роуты
 │   ├── info.py         — /api/info (health + db ping)
-│   ├── auth.py         — TG initData → session token
-│   ├── public.py       — /public/hotels, /public/rooms (без auth)
+│   ├── auth.py         — /auth/* (TG initData → session token; whoami; dev-login)
+│   ├── public.py       — /public/* (катaлог отелей, без auth)
 │   ├── events.py       — SSE: /public/hotels/{slug}/events
-│   ├── client.py       — /c/* (бронирование от лица гостя)
+│   ├── client.py       — /c/bookings* (бронирование от лица гостя)
 │   ├── payments.py     — /c/bookings/{code}/pay/* (mock-провайдер)
-│   ├── partner.py      — /p/* (отельер: hotels/rooms/bookings/staff/audit)
+│   ├── partner/        — /p/* (отельер), 7 sub-роутеров по доменам:
+│   │   ├── __init__.py — собирает router с prefix='/p'
+│   │   ├── hotels.py   — CRUD + dashboard + checklist + stats
+│   │   ├── rooms.py    — Rooms + Availability + /p/rooms flat
+│   │   ├── services.py — hotel services
+│   │   ├── bookings.py — incoming + walk-in + confirm/mark-paid/cancel
+│   │   ├── clients.py  — clients CRUD + lookup
+│   │   ├── staff.py    — members + invites
+│   │   └── audit.py    — audit log + CSV
 │   ├── admin.py        — /admin/* (верификация партнёров, promote/demote)
-│   ├── tg.py           — webhook /tg/bot + bot-команды
+│   ├── tg.py           — webhook /tg/bot
 │   ├── uploads.py      — фото отелей/комнат/клиентов
 │   └── qr.py           — /me/qr (платёжный QR владельца)
 ├── core/
 │   ├── config.py       — pydantic-settings (env)
 │   ├── database.py     — async engine + get_db
+│   ├── deps.py         — AuthContext + require_role / require_partner_or_staff
 │   ├── tg_auth.py      — verify TG initData (HMAC)
+│   ├── auth_scope.py   — load_accessible_owners (owner + staff membership)
+│   ├── audit.py        — audit(...) helper (write в audit_log)
+│   ├── autocancel.py   — фоновая отмена устаревших pending-броней
+│   ├── payments.py     — provider interface (MockProvider)
+│   ├── pubsub.py       — in-memory pubsub для SSE
 │   └── exceptions.py   — APIError
+├── services/
+│   └── scope.py        — owner-scope DB helpers (get_my_hotel/room/...);
+│                         используется api/partner/* и api/uploads.py
 ├── models/models.py    — SQLAlchemy модели
-└── schemas/            — pydantic DTO (auth/hotels/bookings/partner/admin)
-alembic/versions/       — миграции (~16 ревизий)
+└── schemas/            — pydantic DTO; view-классы умеют @classmethod from_model
+alembic/versions/       — миграции
 scripts/
 ├── seed_demo.py        — демо-данные
 ├── seed_fictional.py   — больше демо-данных
 ├── gen_init_data.py    — генерация initData для dev-тестов
 └── promote_to_admin.py — выдать роль admin по telegram_id
 ```
+
+### Правила к файлам кода
+
+- Размер ≤ 300 строк (target), потолок 500.
+- Один файл = одна доменная ответственность.
+- Верхний docstring 2-5 строк: scope + ключевые инварианты.
+- Helpers DB-доступа — в `app/services/scope.py`, не в роут-файле.
+- Конверторы model→view — как `@classmethod from_model(cls, ...)` в schemas,
+  не отдельные функции в роутах.
 
 ## TG webhook
 

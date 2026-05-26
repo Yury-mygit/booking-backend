@@ -1,4 +1,13 @@
-"""SSE endpoint: clients subscribe to refresh-pings per hotel."""
+"""SSE realtime: клиенты подписываются на refresh-пинги по отелю.
+
+GET /public/hotels/{slug_or_id}/events — Server-Sent Events,
+in-memory pubsub (см. `core/pubsub.py`). Heartbeat каждые 30 секунд,
+чтобы не упереться в proxy idle-timeout.
+
+Publish-хуки разбросаны по write-точкам (booking create/confirm/cancel,
+availability update). Caddy для этого пути выставляет `flush_interval -1`
+и исключение из `encode` (см. Caddyfile `book.dev` блок).
+"""
 import asyncio
 import json
 

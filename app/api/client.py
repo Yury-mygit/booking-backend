@@ -1,3 +1,13 @@
+"""Client-side booking endpoints (/c/bookings*, любой залогиненный юзер).
+
+POST /c/bookings — создание брони гостем (auto-cancel через 15 мин, если
+не оплачена/не подтверждена; см. `core/autocancel.py`).
+GET  /c/bookings, /c/bookings/{code} — мои брони (фильтр по client_id из
+сессии).
+
+Платежи живут в `payments.py` (тот же префикс /c, отдельный модуль).
+Walk-in бронирования (от лица партнёра) — в `partner.py` /p/walkin-bookings.
+"""
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query

@@ -1,3 +1,14 @@
+"""Auth endpoints (/auth/*).
+
+- POST /auth/tg — обмен Telegram initData на session token (HMAC-verify
+  через `tg_auth.verify_init_data`). Variant B (single-app rework
+  2026-05-24): role в сессии больше не определяется параметром
+  `requested_role`; backend выдаёт client-сессию, реальные права
+  считаются per-endpoint через `accessible_owners` + `user.role`.
+- GET  /auth/whoami — user + accessible_owners + nav-флаги.
+- POST /auth/dev-login — bypass для локальной отладки, доступен только
+  при `settings.dev_mode=True`; на проде 404 (см. Caddyfile `book.dev`).
+"""
 import secrets
 from datetime import datetime, timedelta, timezone
 

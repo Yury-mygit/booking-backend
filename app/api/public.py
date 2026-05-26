@@ -1,3 +1,14 @@
+"""Public catalog (/public/*, без auth).
+
+GET /public/hotels — список published-отелей (фильтры city, check_in/out).
+GET /public/hotels/{slug_or_id} — детальная карточка + комнаты + услуги.
+
+Возвращаются только `HotelStatus.published` — pending/draft/archived
+невидимы. Если запрошен диапазон дат — комнаты фильтруются по
+`Availability` (отсутствие записи = свободно; см. `_validate_date_range`).
+
+SSE на `/public/hotels/{slug}/events` живёт в `events.py`.
+"""
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query

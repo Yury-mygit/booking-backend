@@ -1,3 +1,20 @@
+"""Partner endpoints (/p/*, require_partner_or_staff).
+
+⚠ FILE-SIZE WARNING: 2000+ строк, 10 доменов. План разбиения — см.
+   `~/claude-workspace/history/2026-05-26-booking-backend-refactor-plan.md`
+   (Этап 4). До разбиения секции внутри — в порядке:
+     hotels (CRUD + dashboard + checklist + stats) → rooms → availability
+     → services → bookings + walk-in → rooms-flat → clients → staff
+     → staff invites → audit.
+
+Авторизация: `require_partner_or_staff` (alias `require_verified_partner`)
+проверяет `accessible_owners` (verified partner_profile ИЛИ staff
+membership). Staff-permissions (manage_hotel/rooms/bookings/staff)
+проверяются точечно через `_scope_owner_ids` + flags на PartnerStaff.
+
+Все write-операции пишут в audit_log через `audit(...)` helper —
+читается на /p/audit и /p/audit.csv.
+"""
 import secrets
 from datetime import date, datetime, timedelta, timezone
 

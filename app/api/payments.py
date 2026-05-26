@@ -1,4 +1,15 @@
-"""Client-side payment endpoints (mock provider for now)."""
+"""Client-side платежи (/c/bookings/{code}/pay/init,
+/c/payments/{id}/mock-confirm).
+
+Mock-провайдер (см. `core/payments.py`): `pay/init` создаёт Payment в
+PENDING, фронт показывает QR; `mock-confirm` переводит Payment+Booking в
+PAID. Реальный провайдер заменит mock через тот же интерфейс
+`payment_provider`.
+
+Booking имеет два независимых дименшна: `confirmed` (партнёр подтвердил)
+и `paid` (клиент оплатил). Для постоплатных броней (walk-in) — paid
+выставляется через `/p/bookings/{code}/mark-paid`.
+"""
 from __future__ import annotations
 
 import uuid

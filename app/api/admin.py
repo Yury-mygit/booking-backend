@@ -1,3 +1,14 @@
+"""Admin endpoints (/admin/*, require_role(UserRole.admin)).
+
+Users: list + verify-partner / promote-admin / revoke-partner / demote-admin.
+Hotels: list + set-status. Bookings: list + cancel. Metrics: counters.
+
+Verify/revoke-partner — переключают `partner_profile.verified_at` и
+`user.role` (partner ↔ client). Promote/demote-admin — меняют `user.role`
+напрямую, без profile-связи. Revoke и demote также чистят активные
+сессии затронутой роли, чтобы фронт не показывал устаревшую плашку
+доступа после server-side даунгрейда.
+"""
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query

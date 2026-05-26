@@ -1,3 +1,4 @@
+"""Health-check: GET /api/info → {service, version, db}. Без auth, без префикса."""
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession

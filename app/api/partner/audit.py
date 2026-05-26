@@ -1,77 +1,19 @@
 """Partner audit log read: /p/audit (paged JSON) + /p/audit.csv (stream)."""
-import csv
-import io
-import secrets
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, case, delete, exists, func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import pubsub
-from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import AuthContext, current_user, require_verified_partner
-from app.core.exceptions import APIError
-from app.core.audit import audit
+from app.core.deps import AuthContext, require_verified_partner
 from app.services import scope
 from app.models.models import (
     AuditLog,
-    Availability,
-    AvailabilityStatus,
-    Booking,
-    BookingStatus,
-    Client,
-    Hotel,
-    HotelService,
-    HotelStatus,
-    PartnerStaff,
-    PartnerStaffInvite,
-    Room,
     User,
-    UserRole,
 )
 from app.schemas.partner import (
     AuditEntryView,
-    AvailabilityBatchUpdate,
-    AvailabilityRowOut,
-    ClientLookup,
-    ClientPartnerView,
-    ClientUpdate,
-    ChecklistAction,
-    ChecklistItem,
-    HotelCreate,
-    HotelDashboard,
-    HotelPartnerView,
-    HotelStats,
-    HotelUpdate,
-    OwnerAccess,
-    PartnerBookingPostpaySet,
-    PartnerBookingView,
-    RoomCreate,
-    RoomFlatView,
-    RoomPartnerView,
-    RoomUpdate,
-    ServiceCreate,
-    ServicePartnerView,
-    ServiceUpdate,
-    StaffCreate,
-    StaffInviteAccept,
-    StaffInviteCreate,
-    StaffInviteView,
-    StaffPerms,
-    StaffUpdate,
-    StaffView,
-    WalkinBookingCreate,
-)
-from app.utils import (
-    date_range_nights,
-    gen_booking_code,
-    gen_unique_hotel_slug,
-    normalize_email,
-    normalize_phone,
 )
 
 router = APIRouter()  # prefix задан в partner/__init__.py

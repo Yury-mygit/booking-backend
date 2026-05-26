@@ -1,9 +1,15 @@
-"""Photo upload/serve for hotels.
+"""Photo upload/serve для hotels/rooms/clients.
 
-Storage layout:
-    {settings.storage_path}/hotels/{hotel_id}/{token}.{ext}
+Storage layout: `{settings.storage_path}/{kind}/{id}/{token}.{ext}`.
+URL шаблон: `/api/v1/photos/{kind}/{id}/{filename}`.
 
-URL: /api/v1/photos/hotels/{hotel_id}/{filename}
+Все write-операции работают в scope'е `accessible_owners` (owner +
+staff с правами на отель). До 2026-05-26 локальные `_get_my_*_or_404`
+проверяли `owner_user_id == ctx.user.id`, что отрезало staff'у доступ —
+теперь через `app.services.scope.*`.
+
+Магический-байт sniff (`_MAGIC`) делает грубую проверку «это вообще
+картинка», поверх MIME из `UploadFile`.
 """
 import secrets
 from pathlib import Path
@@ -18,6 +24,7 @@ from app.core.database import get_db
 from app.core.deps import AuthContext, require_role, require_verified_partner
 from app.core.exceptions import APIError
 from app.models.models import UserRole
+from app.services import scope
 
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 # Rough magic-byte sniffs to make sure the upload is actually an image.
@@ -43,35 +50,6 @@ def _url_for(hotel_id: int, filename: str) -> str:
     return f"/api/v1/photos/hotels/{hotel_id}/{filename}"
 
 
-async def _get_my_hotel_or_404(db: AsyncSession, ctx: AuthContext, hotel_id: int):
-    # Local helper to avoid circular import on partner module.
-    from app.models.models import Hotel
-    from sqlalchemy import select
-    h = (
-        await db.execute(
-            select(Hotel).where(Hotel.id == hotel_id, Hotel.owner_user_id == ctx.user.id)
-        )
-    ).scalar_one_or_none()
-    if h is None:
-        raise APIError(404, "not_found", "Hotel not found")
-    return h
-
-
-async def _get_my_room_or_404(db: AsyncSession, ctx: AuthContext, room_id: int):
-    from app.models.models import Hotel, Room
-    from sqlalchemy import select
-    row = (
-        await db.execute(
-            select(Room, Hotel)
-            .join(Hotel, Hotel.id == Room.hotel_id)
-            .where(Room.id == room_id, Hotel.owner_user_id == ctx.user.id)
-        )
-    ).first()
-    if row is None:
-        raise APIError(404, "not_found", "Room not found")
-    return row[0]
-
-
 def _safe_room_dir(room_id: int) -> Path:
     return Path(settings.storage_path) / "rooms" / str(room_id)
 
@@ -87,7 +65,7 @@ async def upload_photo(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    h = await _get_my_hotel_or_404(db, ctx, hotel_id)
+    h = await scope.get_my_hotel(db, ctx, hotel_id)
 
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXT:
@@ -122,7 +100,7 @@ async def delete_photo(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    h = await _get_my_hotel_or_404(db, ctx, hotel_id)
+    h = await scope.get_my_hotel(db, ctx, hotel_id)
     photos = list(h.photos or [])
     if url not in photos:
         raise APIError(404, "not_found", "Photo not in hotel")
@@ -151,7 +129,7 @@ async def reorder_photos(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    h = await _get_my_hotel_or_404(db, ctx, hotel_id)
+    h = await scope.get_my_hotel(db, ctx, hotel_id)
     current = set(h.photos or [])
     new = set(payload.urls)
     if current != new:
@@ -185,7 +163,7 @@ async def upload_room_photo(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    r = await _get_my_room_or_404(db, ctx, room_id)
+    r = await scope.get_my_room(db, ctx, room_id)
 
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXT:
@@ -220,7 +198,7 @@ async def delete_room_photo(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    r = await _get_my_room_or_404(db, ctx, room_id)
+    r = await scope.get_my_room(db, ctx, room_id)
     photos = list(r.photos or [])
     if url not in photos:
         raise APIError(404, "not_found", "Photo not in room")
@@ -248,7 +226,7 @@ async def reorder_room_photos(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    r = await _get_my_room_or_404(db, ctx, room_id)
+    r = await scope.get_my_room(db, ctx, room_id)
     current = set(r.photos or [])
     new = set(payload.urls)
     if current != new:
@@ -279,23 +257,6 @@ def _client_url(client_id: int, filename: str) -> str:
     return f"/api/v1/photos/clients/{client_id}/{filename}"
 
 
-async def _get_my_client_or_404(db: AsyncSession, ctx: AuthContext, client_id: int):
-    from app.models.models import Booking, Client, Hotel, Room
-    from sqlalchemy import select as _sel
-    stmt = (
-        _sel(Client)
-        .join(Booking, Booking.client_id == Client.id)
-        .join(Room, Room.id == Booking.room_id)
-        .join(Hotel, Hotel.id == Room.hotel_id)
-        .where(Client.id == client_id, Hotel.owner_user_id == ctx.user.id)
-        .limit(1)
-    )
-    c = (await db.execute(stmt)).scalar_one_or_none()
-    if c is None:
-        raise APIError(404, "not_found", "Client not found")
-    return c
-
-
 @router.post("/p/clients/{client_id}/photo")
 async def upload_client_photo(
     client_id: int,
@@ -303,7 +264,7 @@ async def upload_client_photo(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    c = await _get_my_client_or_404(db, ctx, client_id)
+    c = await scope.get_my_client(db, ctx, client_id)
 
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXT:
@@ -345,7 +306,7 @@ async def delete_client_photo(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    c = await _get_my_client_or_404(db, ctx, client_id)
+    c = await scope.get_my_client(db, ctx, client_id)
     prev = c.photo_url
     c.photo_url = None
     await db.commit()

@@ -195,6 +195,7 @@ async def whoami(
         "session_expires_at": ctx.session.expires_at.isoformat(),
         "partner_status": partner_status,
         "is_superadmin": ctx.user.is_superadmin,
+        "bot_blocked_or_unreachable": ctx.user.bot_blocked_or_unreachable,
         "accessible_owners": [o.model_dump() for o in accessible_owners],
         "available_roles": [r.value for r in available_roles],
     }

@@ -82,11 +82,17 @@ def _msg_to_view(m: ChatMessage) -> MessageView:
 
 
 async def _resolve_partner_thread(
-    db: AsyncSession, ctx: AuthContext, client_id: int, hotel_id: int
+    db: AsyncSession,
+    ctx: AuthContext,
+    client_id: int,
+    hotel_id: int,
+    require_write: bool = True,
 ) -> tuple[Hotel, Client, ChatThread]:
-    """Получить (hotel, client, thread) с full permission + visibility check.
+    """Получить (hotel, client, thread) с visibility + (опц.) write-perm check.
 
     Видимость клиента: бронь в отеле партнёра ИЛИ уже открытый чат-тред.
+    Write (send_message) требует `chat_with_clients`. Read/mark_read доступны
+    любому staff в scope отеля (6.4 read-only режим карты client-hotel-chat).
     """
     hotel = (
         await db.execute(select(Hotel).where(Hotel.id == hotel_id))
@@ -97,7 +103,7 @@ async def _resolve_partner_thread(
     perms = ctx.accessible_owners.get(hotel.owner_user_id)
     if perms is None:
         raise APIError(403, "forbidden", "Hotel not in your scope")
-    if not perms.chat_with_clients:
+    if require_write and not perms.chat_with_clients:
         raise APIError(403, "permission_denied", "Missing permission: chat_with_clients")
 
     client = (
@@ -146,7 +152,9 @@ async def get_chat_thread(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ) -> ThreadView:
-    hotel, _, thread = await _resolve_partner_thread(db, ctx, client_id, hotel_id)
+    hotel, _, thread = await _resolve_partner_thread(
+        db, ctx, client_id, hotel_id, require_write=False
+    )
     last = (await chat_service.last_messages_for(db, [thread.id])).get(thread.id)
     return _thread_view(thread, hotel, last)
 
@@ -160,7 +168,9 @@ async def list_chat_messages(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ) -> MessagesPage:
-    _, _, thread = await _resolve_partner_thread(db, ctx, client_id, hotel_id)
+    _, _, thread = await _resolve_partner_thread(
+        db, ctx, client_id, hotel_id, require_write=False
+    )
     items, next_cursor = await chat_service.list_messages(
         db, thread.id, cursor, limit
     )
@@ -216,7 +226,9 @@ async def mark_chat_read(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    _, _, thread = await _resolve_partner_thread(db, ctx, client_id, hotel_id)
+    _, _, thread = await _resolve_partner_thread(
+        db, ctx, client_id, hotel_id, require_write=False
+    )
     await chat_service.mark_read(db, thread, ChatSenderKind.hotel)
 
 

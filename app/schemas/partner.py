@@ -240,6 +240,7 @@ class PartnerBookingView(BaseModel):
     room_name_ru: str
     hotel_id: int
     hotel_name_ru: str
+    hotel_owner_user_id: int
     client_first_name: str | None
     check_in: date
     check_out: date
@@ -261,6 +262,7 @@ class PartnerBookingView(BaseModel):
             room_name_ru=r.name_ru,
             hotel_id=h.id,
             hotel_name_ru=h.name_ru,
+            hotel_owner_user_id=h.owner_user_id,
             client_first_name=c.first_name,
             check_in=b.check_in,
             check_out=b.check_out,

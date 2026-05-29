@@ -11,6 +11,7 @@ from app.core.audit import audit
 from app.services import scope
 from app.models.models import (
     Booking,
+    ChatThread,
     Client,
     Hotel,
     Room,
@@ -56,7 +57,43 @@ async def list_my_clients(
         .limit(500)
     )
     rows = (await db.execute(stmt)).all()
-    return [ClientPartnerView.from_model(c, bookings_count=cnt, last_booking_date=last) for (c, cnt, last) in rows]
+    unread = await _unread_chat_client_ids(db, accessible_ids)
+    return [
+        ClientPartnerView.from_model(
+            c,
+            bookings_count=cnt,
+            last_booking_date=last,
+            has_unread_chat=(c.id in unread),
+        )
+        for (c, cnt, last) in rows
+    ]
+
+
+async def _unread_chat_client_ids(
+    db: AsyncSession, accessible_owner_ids: list[int]
+) -> set[int]:
+    """Возвращает set client.id у которых есть тред с непрочитанным со
+    стороны отеля сообщением, в пределах accessible_owners.
+
+    «Непрочитано» = `last_message_at > hotel_last_read_at` (или read=NULL).
+    """
+    if not accessible_owner_ids:
+        return set()
+    stmt = (
+        select(Client.id)
+        .join(ChatThread, ChatThread.client_user_id == Client.user_id)
+        .join(Hotel, Hotel.id == ChatThread.hotel_id)
+        .where(
+            Hotel.owner_user_id.in_(accessible_owner_ids),
+            ChatThread.last_message_at.is_not(None),
+            (
+                ChatThread.hotel_last_read_at.is_(None)
+                | (ChatThread.last_message_at > ChatThread.hotel_last_read_at)
+            ),
+        )
+        .distinct()
+    )
+    return set((await db.execute(stmt)).scalars().all())
 
 
 @router.post("/clients/lookup", response_model=ClientPartnerView | None)

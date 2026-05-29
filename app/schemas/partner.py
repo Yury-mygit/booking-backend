@@ -302,6 +302,7 @@ class ClientPartnerView(BaseModel):
     photo_url: str | None
     bookings_count: int
     last_booking_date: date | None
+    has_unread_chat: bool = False
     created_at: datetime
 
     @classmethod
@@ -311,6 +312,7 @@ class ClientPartnerView(BaseModel):
         *,
         bookings_count: int = 0,
         last_booking_date: date | None = None,
+        has_unread_chat: bool = False,
     ) -> "ClientPartnerView":
         return cls(
             id=c.id,
@@ -324,6 +326,7 @@ class ClientPartnerView(BaseModel):
             photo_url=c.photo_url,
             bookings_count=bookings_count,
             last_booking_date=last_booking_date,
+            has_unread_chat=has_unread_chat,
             created_at=c.created_at,
         )
 

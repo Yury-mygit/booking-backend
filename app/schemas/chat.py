@@ -34,6 +34,8 @@ class ThreadView(BaseModel):
     id: int
     hotel: HotelMini
     last_message_at: datetime | None
+    last_message_body: str | None = None
+    last_message_sender_kind: ChatSenderKind | None = None
     unread_for_client: bool
     unread_for_hotel: bool
 

@@ -8,10 +8,11 @@ mark-as-read, rate-limit. REST-обвязка и нотификации — в a
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func as sa_func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from app.core import chat_pubsub
 from app.core.exceptions import APIError
 from app.models.models import (
     ChatMessage,
@@ -120,13 +121,43 @@ async def append_message(
     await db.flush()
 
     now = datetime.now(timezone.utc)
+    # Sender's own last_read_at advances to "now" — иначе своё же сообщение
+    # считалось бы непрочитанным (last_message_at > *_last_read_at).
+    own_read_col = (
+        ChatThread.client_last_read_at
+        if sender_kind == ChatSenderKind.client
+        else ChatThread.hotel_last_read_at
+    )
     await db.execute(
         update(ChatThread)
         .where(ChatThread.id == thread.id)
-        .values(last_message_at=now)
+        .values(last_message_at=now, **{own_read_col.key: now})
     )
     await db.commit()
     await db.refresh(msg)
+
+    # Resolve hotel.owner_user_id for the owner-topic broadcast.
+    owner_user_id = (
+        await db.execute(
+            select(Hotel.owner_user_id).where(Hotel.id == thread.hotel_id)
+        )
+    ).scalar_one()
+    event = {
+        "type": "message",
+        "thread_id": thread.id,
+        "hotel_id": thread.hotel_id,
+        "client_user_id": thread.client_user_id,
+        "msg": {
+            "id": msg.id,
+            "sender_kind": msg.sender_kind.value,
+            "subject_type": msg.subject_type.value if msg.subject_type else None,
+            "subject_id": msg.subject_id,
+            "body": msg.body,
+            "created_at": msg.created_at.isoformat(),
+        },
+    }
+    await chat_pubsub.publish(f"client:{thread.client_user_id}", event)
+    await chat_pubsub.publish(f"owner:{owner_user_id}", event)
     return msg
 
 
@@ -170,6 +201,32 @@ async def mark_read(
             .values(hotel_last_read_at=now)
         )
     await db.commit()
+
+
+async def last_messages_for(
+    db: AsyncSession, thread_ids: list[int]
+) -> dict[int, ChatMessage]:
+    """Для каждого thread_id вернуть последнее (по id) сообщение.
+
+    Пустые треды отсутствуют в dict. Используется для preview в ThreadView.
+    """
+    if not thread_ids:
+        return {}
+    subq = (
+        select(
+            ChatMessage.thread_id.label("tid"),
+            sa_func.max(ChatMessage.id).label("max_id"),
+        )
+        .where(ChatMessage.thread_id.in_(thread_ids))
+        .group_by(ChatMessage.thread_id)
+        .subquery()
+    )
+    rows = (
+        await db.execute(
+            select(ChatMessage).join(subq, subq.c.max_id == ChatMessage.id)
+        )
+    ).scalars().all()
+    return {m.thread_id: m for m in rows}
 
 
 def is_unread_for(thread: ChatThread, side: ChatSenderKind) -> bool:

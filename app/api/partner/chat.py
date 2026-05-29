@@ -13,13 +13,19 @@ UI-точка входа: карточка клиента на вкладке «
 (который требует бронь) — для чата клиент виден если у него есть либо
 бронь в отеле партнёра, либо уже открытый чат-тред.
 """
-from fastapi import APIRouter, Depends, Query
+import asyncio
+import json
+
+from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import chat_pubsub
 from app.core.audit import audit
+from app.core.auth_scope import load_accessible_owners
 from app.core.database import get_db
-from app.core.deps import AuthContext, require_verified_partner
+from app.core.deps import AuthContext, _resolve_session, require_verified_partner
 from app.core.exceptions import APIError
 from app.models.models import (
     Booking,
@@ -41,10 +47,26 @@ from app.services import chat as chat_service
 
 router = APIRouter()
 
+_HEARTBEAT_SECONDS = 30
+
 
 def _hotel_to_mini(h: Hotel) -> HotelMini:
     photo = h.photos[0] if h.photos else None
     return HotelMini(id=h.id, slug=h.slug, name_ru=h.name_ru, photo=photo)
+
+
+def _thread_view(
+    th: ChatThread, h: Hotel, last_msg: ChatMessage | None
+) -> ThreadView:
+    return ThreadView(
+        id=th.id,
+        hotel=_hotel_to_mini(h),
+        last_message_at=th.last_message_at,
+        last_message_body=last_msg.body if last_msg else None,
+        last_message_sender_kind=last_msg.sender_kind if last_msg else None,
+        unread_for_client=chat_service.is_unread_for(th, ChatSenderKind.client),
+        unread_for_hotel=chat_service.is_unread_for(th, ChatSenderKind.hotel),
+    )
 
 
 def _msg_to_view(m: ChatMessage) -> MessageView:
@@ -125,13 +147,8 @@ async def get_chat_thread(
     db: AsyncSession = Depends(get_db),
 ) -> ThreadView:
     hotel, _, thread = await _resolve_partner_thread(db, ctx, client_id, hotel_id)
-    return ThreadView(
-        id=thread.id,
-        hotel=_hotel_to_mini(hotel),
-        last_message_at=thread.last_message_at,
-        unread_for_client=chat_service.is_unread_for(thread, ChatSenderKind.client),
-        unread_for_hotel=chat_service.is_unread_for(thread, ChatSenderKind.hotel),
-    )
+    last = (await chat_service.last_messages_for(db, [thread.id])).get(thread.id)
+    return _thread_view(thread, hotel, last)
 
 
 @router.get("/clients/{client_id}/chat/messages", response_model=MessagesPage)
@@ -201,3 +218,50 @@ async def mark_chat_read(
 ) -> None:
     _, _, thread = await _resolve_partner_thread(db, ctx, client_id, hotel_id)
     await chat_service.mark_read(db, thread, ChatSenderKind.hotel)
+
+
+@router.get("/chat/events")
+async def partner_chat_events(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    token: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """SSE: события чата по всем accessible_owners партнёра.
+
+    Auth: header или query (EventSource не умеет headers).
+    Фронт фильтрует по hotel_id. На reconnect topic'ы пересчитываются.
+    Caddy `book.dev` блок выставляет `flush_interval -1`.
+    """
+    if not authorization and token:
+        authorization = f"Bearer {token}"
+    ctx = await _resolve_session(authorization, db)
+    accessible = await load_accessible_owners(db, ctx.user)
+    topics = [f"owner:{oid}" for oid in accessible.keys()]
+    if not topics:
+        raise APIError(403, "forbidden", "No accessible owners")
+
+    async def gen():
+        yield "retry: 5000\n\n"
+        sub = chat_pubsub.subscribe_many(topics)
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(
+                        sub.__anext__(), timeout=_HEARTBEAT_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            await sub.aclose()
+
+    headers = {
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)

@@ -5,6 +5,7 @@
 Здесь — get-or-create thread, append message, list (cursor-based),
 mark-as-read, rate-limit. REST-обвязка и нотификации — в api-слое.
 """
+import asyncio
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 
@@ -158,6 +159,12 @@ async def append_message(
     }
     await chat_pubsub.publish(f"client:{thread.client_user_id}", event)
     await chat_pubsub.publish(f"owner:{owner_user_id}", event)
+
+    # TG-уведомление в фоне: своя сессия, REST-ответ не ждёт.
+    # Импорт здесь, чтобы избежать циклической зависимости на старте.
+    from app.services import tg_notifications
+    asyncio.create_task(tg_notifications.notify_chat_message(thread.id, msg.id))
+
     return msg
 
 

@@ -104,6 +104,9 @@ class User(Base):
         Boolean, nullable=False, server_default=text("false")
     )
     qr_image_url: Mapped[str | None] = mapped_column(String(512))
+    bot_blocked_or_unreachable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

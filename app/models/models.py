@@ -73,6 +73,17 @@ class DocKind(str, enum.Enum):
     other = "other"
 
 
+class ChatSenderKind(str, enum.Enum):
+    client = "client"
+    hotel = "hotel"
+
+
+class ChatSubjectType(str, enum.Enum):
+    hotel = "hotel"
+    booking = "booking"
+    room = "room"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -318,6 +329,9 @@ class PartnerStaff(Base):
     perm_manage_staff: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    perm_chat_with_clients: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     note: Mapped[str | None] = mapped_column(String(128))
     added_by_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
@@ -342,6 +356,7 @@ class PartnerStaffInvite(Base):
     perm_manage_rooms: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     perm_manage_bookings: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     perm_manage_staff: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    perm_chat_with_clients: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     note: Mapped[str | None] = mapped_column(String(128))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -368,6 +383,47 @@ class AuditLog(Base):
     subject_type: Mapped[str | None] = mapped_column(String(32))
     subject_id: Mapped[int | None] = mapped_column(Integer)
     payload: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ChatThread(Base):
+    __tablename__ = "chat_threads"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    hotel_id: Mapped[int] = mapped_column(
+        ForeignKey("hotels.id", ondelete="CASCADE"), nullable=False
+    )
+    client_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    client_last_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    hotel_last_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    thread_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_threads.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sender_kind: Mapped[ChatSenderKind] = mapped_column(
+        ENUM(ChatSenderKind, name="chat_sender_kind"), nullable=False
+    )
+    sender_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    subject_type: Mapped[ChatSubjectType | None] = mapped_column(
+        ENUM(ChatSubjectType, name="chat_subject_type")
+    )
+    subject_id: Mapped[int | None] = mapped_column(Integer)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

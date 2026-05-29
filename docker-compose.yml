@@ -20,7 +20,7 @@ services:
     volumes:
       - booking_storage:/app/storage
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/info"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/info', timeout=3).status==200 else 1)"]
       interval: 15s
       timeout: 5s
       retries: 3

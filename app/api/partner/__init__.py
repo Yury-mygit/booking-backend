@@ -16,6 +16,7 @@ from fastapi import APIRouter
 from app.api.partner import (
     audit,
     bookings,
+    chat,
     clients,
     hotels,
     rooms,
@@ -29,5 +30,6 @@ router.include_router(rooms.router)
 router.include_router(services.router)
 router.include_router(bookings.router)
 router.include_router(clients.router)
+router.include_router(chat.router)
 router.include_router(staff.router)
 router.include_router(audit.router)

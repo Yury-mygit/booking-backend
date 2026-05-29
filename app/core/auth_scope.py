@@ -22,6 +22,7 @@ class OwnerPerms:
         "manage_rooms",
         "manage_bookings",
         "manage_staff",
+        "chat_with_clients",
     )
 
     def __init__(
@@ -33,6 +34,7 @@ class OwnerPerms:
         manage_rooms: bool,
         manage_bookings: bool,
         manage_staff: bool,
+        chat_with_clients: bool,
     ) -> None:
         self.owner_user_id = owner_user_id
         self.owner_display_name = owner_display_name
@@ -41,6 +43,7 @@ class OwnerPerms:
         self.manage_rooms = manage_rooms
         self.manage_bookings = manage_bookings
         self.manage_staff = manage_staff
+        self.chat_with_clients = chat_with_clients
 
     def has(self, perm: str) -> bool:
         return bool(getattr(self, perm, False))
@@ -66,6 +69,7 @@ async def load_accessible_owners(
             manage_rooms=True,
             manage_bookings=True,
             manage_staff=True,
+            chat_with_clients=True,
         )
 
     # Staff memberships.
@@ -87,6 +91,7 @@ async def load_accessible_owners(
             manage_rooms=ps.perm_manage_rooms,
             manage_bookings=ps.perm_manage_bookings,
             manage_staff=ps.perm_manage_staff,
+            chat_with_clients=ps.perm_chat_with_clients,
         )
 
     return result

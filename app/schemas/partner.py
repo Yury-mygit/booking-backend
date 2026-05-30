@@ -368,15 +368,17 @@ class StaffPerms(BaseModel):
     manage_rooms: bool = False
     manage_bookings: bool = True
     manage_staff: bool = False
+    chat_with_clients: bool = False
 
     @classmethod
     def from_model(cls, obj: PartnerStaff | PartnerStaffInvite) -> "StaffPerms":
-        """Принимает любую модель с perm_manage_* атрибутами."""
+        """Принимает любую модель с perm_* атрибутами."""
         return cls(
             manage_hotel=obj.perm_manage_hotel,
             manage_rooms=obj.perm_manage_rooms,
             manage_bookings=obj.perm_manage_bookings,
             manage_staff=obj.perm_manage_staff,
+            chat_with_clients=obj.perm_chat_with_clients,
         )
 
 

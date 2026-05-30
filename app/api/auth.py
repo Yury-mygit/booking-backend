@@ -43,6 +43,7 @@ async def _owners_response(db: AsyncSession, user: User) -> list[OwnerAccess]:
                 manage_rooms=op.manage_rooms,
                 manage_bookings=op.manage_bookings,
                 manage_staff=op.manage_staff,
+                chat_with_clients=op.chat_with_clients,
             ),
         )
         for op in raw.values()

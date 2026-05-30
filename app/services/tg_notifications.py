@@ -181,6 +181,8 @@ async def notify_chat_message(thread_id: int, msg_id: int) -> None:
     """
     if not settings.tg_bot_token:
         return
+    if not settings.chat_tg_notifications_enabled:
+        return
     try:
         async with AsyncSessionLocal() as db:
             msg = (

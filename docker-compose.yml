@@ -17,6 +17,7 @@ services:
       - TG_WEBHOOK_SECRET=${TG_WEBHOOK_SECRET:-}
       - DEV_MODE=${DEV_MODE:-false}
       - PUBLIC_BASE_APP=${PUBLIC_BASE_APP:-https://book.dev.raftforge.art/}
+      - CHAT_TG_NOTIFICATIONS_ENABLED=${CHAT_TG_NOTIFICATIONS_ENABLED:-true}
     volumes:
       - booking_storage:/app/storage
     healthcheck:

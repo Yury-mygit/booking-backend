@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     session_ttl_sec: int = 60 * 60 * 24 * 30
 
     tg_webhook_secret: str = ""
+
+    # Этап 4 client-hotel-chat: TG-уведомления о новых чат-сообщениях.
+    # На dev выставляем false через `CHAT_TG_NOTIFICATIONS_ENABLED=false`,
+    # чтобы не спамить себе личку при тестировании.
+    chat_tg_notifications_enabled: bool = True
     # URL для inline-кнопки «Начать» в TG-боте и deep-link'ов.
     # Переопределяется через env PUBLIC_BASE_APP.
     public_base_app: str = "https://book.dev.raftforge.art/"

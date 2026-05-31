@@ -2,6 +2,8 @@ from datetime import date
 
 from pydantic import BaseModel, Field
 
+from app.models.models import MealsKind
+
 
 class HotelListItem(BaseModel):
     id: int
@@ -15,6 +17,7 @@ class HotelListItem(BaseModel):
     city: str
     address: str | None
     photos: list[str]
+    meals: MealsKind
     min_price_kgs: int | None
 
 
@@ -29,7 +32,8 @@ class RoomCard(BaseModel):
     capacity: int
     price_kgs: int
     floor: int | None
-    beds: int | None
+    single_beds: int
+    double_beds: int
     photos: list[str]
     available_for_dates: bool | None = None
     total_kgs_for_dates: int | None = None
@@ -57,6 +61,7 @@ class HotelDetails(BaseModel):
     lat: float | None
     lng: float | None
     photos: list[str]
+    meals: MealsKind
     rooms: list[RoomCard]
     services: list[ServicePublicView]
 

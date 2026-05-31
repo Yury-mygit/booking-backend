@@ -41,6 +41,12 @@ class HotelStatus(str, enum.Enum):
     blocked = "blocked"
 
 
+class MealsKind(str, enum.Enum):
+    none = "none"
+    breakfast = "breakfast"
+    full_board = "full_board"
+
+
 class AvailabilityStatus(str, enum.Enum):
     free = "free"
     blocked = "blocked"
@@ -169,6 +175,11 @@ class Hotel(Base):
     photos: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
+    meals: Mapped[MealsKind] = mapped_column(
+        ENUM(MealsKind, name="meals_kind"),
+        nullable=False,
+        server_default=MealsKind.none.value,
+    )
     status: Mapped[HotelStatus] = mapped_column(
         ENUM(HotelStatus, name="hotel_status"),
         nullable=False,
@@ -202,7 +213,8 @@ class Room(Base):
     capacity: Mapped[int] = mapped_column(Integer, nullable=False)
     price_kgs: Mapped[int] = mapped_column(Integer, nullable=False)
     floor: Mapped[int | None] = mapped_column(Integer)
-    beds: Mapped[int | None] = mapped_column(Integer)
+    single_beds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    double_beds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     photos: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )

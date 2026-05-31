@@ -85,6 +85,7 @@ async def create_hotel(
         lat=payload.lat,
         lng=payload.lng,
         photos=payload.photos,
+        meals=payload.meals,
     )
     db.add(h)
     await db.flush()  # need h.id for slug fallback

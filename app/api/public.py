@@ -96,6 +96,7 @@ async def list_hotels(
             city=h.city,
             address=h.address,
             photos=h.photos or [],
+            meals=h.meals,
             min_price_kgs=min_price,
         )
         for h, min_price in rows
@@ -170,7 +171,8 @@ async def hotel_details(
                 capacity=r.capacity,
                 price_kgs=r.price_kgs,
                 floor=r.floor,
-                beds=r.beds,
+                single_beds=r.single_beds,
+                double_beds=r.double_beds,
                 photos=r.photos or [],
                 available_for_dates=available,
                 total_kgs_for_dates=total,
@@ -211,6 +213,7 @@ async def hotel_details(
         lat=float(hotel.lat) if hotel.lat is not None else None,
         lng=float(hotel.lng) if hotel.lng is not None else None,
         photos=hotel.photos or [],
+        meals=hotel.meals,
         rooms=cards,
         services=services,
     )

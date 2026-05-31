@@ -12,6 +12,11 @@ class CreateBookingRequest(BaseModel):
     guests: int = Field(default=1, ge=1, le=20)
 
 
+class BookingMediaResponse(BaseModel):
+    hotel_photos: list[str]
+    room_photos: list[str]
+
+
 class BookingResponse(BaseModel):
     id: int
     code: str

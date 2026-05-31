@@ -30,7 +30,7 @@ from app.models.models import (
     Room,
     UserRole,
 )
-from app.schemas.bookings import BookingResponse, CreateBookingRequest
+from app.schemas.bookings import BookingMediaResponse, BookingResponse, CreateBookingRequest
 from app.utils import date_range_nights, gen_booking_code, get_or_create_client_for_user
 
 router = APIRouter(prefix="/c", tags=["client"])
@@ -199,6 +199,30 @@ async def get_my_booking(
     if booking is None:
         raise APIError(404, "not_found", "Booking not found")
     return await _build_response(db, booking)
+
+
+@router.get("/bookings/{code}/media", response_model=BookingMediaResponse)
+async def get_my_booking_media(
+    code: str,
+    ctx: AuthContext = Depends(require_role(UserRole.client)),
+    db: AsyncSession = Depends(get_db),
+) -> BookingMediaResponse:
+    row = (
+        await db.execute(
+            select(Booking, Room, Hotel)
+            .join(Client, Client.id == Booking.client_id)
+            .join(Room, Room.id == Booking.room_id)
+            .join(Hotel, Hotel.id == Room.hotel_id)
+            .where(Booking.code == code, Client.user_id == ctx.user.id)
+        )
+    ).first()
+    if row is None:
+        raise APIError(404, "not_found", "Booking not found")
+    _, room, hotel = row
+    return BookingMediaResponse(
+        hotel_photos=list(hotel.photos or []),
+        room_photos=list(room.photos or []),
+    )
 
 
 @router.post("/bookings/{code}/cancel", response_model=BookingResponse)

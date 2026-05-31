@@ -44,13 +44,11 @@ def _pick_lang(message: dict) -> str:
 
 
 def _app_url(start_param: str) -> str:
-    # Юрий, 2026-05-31: убрали ?startapp=<deep-link> из кнопки бота —
-    # парсинг deep-link во фронте сломался после серии правок entry/
-    # fullscreen. Кнопка открывает WebApp на base URL, юзер сам
-    # навигируется в отель/комнату. Восстановить deep link — отдельная
-    # задача после стабилизации client SPA.
-    _ = start_param  # сохраняем сигнатуру, prompt всё ещё может зависеть.
-    return settings.public_base_app.rstrip("/") + "/"
+    base = settings.public_base_app.rstrip("/") + "/"
+    if start_param:
+        # WebApp URL — query string, не hash (Telegram mobile перетирает hash).
+        return f"{base}?startapp={start_param}"
+    return base
 
 
 def _hotel_name_by_slug(hotel: Hotel | None, lang: str) -> str | None:

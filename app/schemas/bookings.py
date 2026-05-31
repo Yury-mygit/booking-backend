@@ -18,6 +18,7 @@ class BookingResponse(BaseModel):
     room_id: int
     hotel_id: int
     hotel_name_ru: str
+    hotel_photo: str | None
     check_in: date
     check_out: date
     guests: int

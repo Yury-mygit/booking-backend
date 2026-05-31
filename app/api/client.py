@@ -11,7 +11,7 @@ Walk-in бронирования (от лица партнёра) — в `partne
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,12 +53,14 @@ async def _build_response(db: AsyncSession, booking: Booking) -> BookingResponse
     if room_hotel is None:
         raise APIError(500, "internal", "Room/hotel missing")
     _, hotel = room_hotel
+    photos = hotel.photos or []
     return BookingResponse(
         id=booking.id,
         code=booking.code,
         room_id=booking.room_id,
         hotel_id=hotel.id,
         hotel_name_ru=hotel.name_ru,
+        hotel_photo=photos[0] if photos else None,
         check_in=booking.check_in,
         check_out=booking.check_out,
         guests=booking.guests,
@@ -196,4 +198,61 @@ async def get_my_booking(
     ).scalar_one_or_none()
     if booking is None:
         raise APIError(404, "not_found", "Booking not found")
+    return await _build_response(db, booking)
+
+
+@router.post("/bookings/{code}/cancel", response_model=BookingResponse)
+async def cancel_my_booking(
+    code: str,
+    ctx: AuthContext = Depends(require_role(UserRole.client)),
+    db: AsyncSession = Depends(get_db),
+) -> BookingResponse:
+    booking = (
+        await db.execute(
+            select(Booking)
+            .join(Client, Client.id == Booking.client_id)
+            .where(Booking.code == code, Client.user_id == ctx.user.id)
+        )
+    ).scalar_one_or_none()
+    if booking is None:
+        raise APIError(404, "not_found", "Booking not found")
+    if booking.status in (BookingStatus.cancelled, BookingStatus.refunded):
+        raise APIError(409, "conflict", f"Booking is already {booking.status.value}")
+
+    avail_rows = (
+        (
+            await db.execute(
+                select(Availability)
+                .where(
+                    Availability.room_id == booking.room_id,
+                    Availability.date >= booking.check_in,
+                    Availability.date < booking.check_out,
+                    Availability.status == AvailabilityStatus.booked,
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for a in avail_rows:
+        if a.price_override is None:
+            await db.execute(
+                delete(Availability).where(
+                    Availability.room_id == a.room_id, Availability.date == a.date
+                )
+            )
+        else:
+            a.status = AvailabilityStatus.free
+
+    booking.status = BookingStatus.cancelled
+    room_hotel = (
+        await db.execute(
+            select(Room).where(Room.id == booking.room_id)
+        )
+    ).scalar_one()
+    hotel_id_for_pub = room_hotel.hotel_id
+    await db.commit()
+    await db.refresh(booking)
+    await pubsub.publish_refresh(hotel_id_for_pub)
     return await _build_response(db, booking)

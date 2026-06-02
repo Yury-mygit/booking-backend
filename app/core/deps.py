@@ -120,3 +120,14 @@ async def require_admin_access(
     if ctx.user.role != UserRole.admin:
         raise APIError(403, "forbidden", "Admin access required")
     return ctx
+
+
+async def require_superadmin(
+    ctx: AuthContext = Depends(current_user),
+) -> AuthContext:
+    """Глобальный superadmin (`User.is_superadmin`) — управление
+    системными настройками, roster агентов support, и т.п. Не путать
+    с `require_admin_access` (продуктовая роль admin)."""
+    if not ctx.user.is_superadmin:
+        raise APIError(403, "forbidden", "Superadmin access required")
+    return ctx

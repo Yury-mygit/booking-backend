@@ -10,6 +10,7 @@ from app.api import (
     payments,
     public,
     qr,
+    support,
     tg,
     uploads,
 )
@@ -23,6 +24,7 @@ api_router.include_router(chat_client.router)
 api_router.include_router(payments.router)
 api_router.include_router(partner.router)
 api_router.include_router(admin.router)
+api_router.include_router(support.router)
 api_router.include_router(tg.router)
 api_router.include_router(uploads.router)
 api_router.include_router(qr.router)

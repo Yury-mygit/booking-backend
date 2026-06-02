@@ -348,3 +348,55 @@ async def get_ticket_with_messages(
     q = q.order_by(TicketMessage.created_at.asc())
     rows = await db.execute(q)
     return ticket, list(rows.scalars().all())
+
+
+# ─── batch helpers для list-карточек ───────────────────────────────
+
+
+async def get_last_messages_map(
+    db: AsyncSession,
+    *,
+    ticket_ids: list[int],
+    include_internal: bool,
+) -> dict[int, TicketMessage]:
+    """Последнее сообщение per ticket. Postgres DISTINCT ON (ticket_id)."""
+    if not ticket_ids:
+        return {}
+    q = select(TicketMessage).where(TicketMessage.ticket_id.in_(ticket_ids))
+    if not include_internal:
+        q = q.where(TicketMessage.is_internal.is_(False))
+    q = q.distinct(TicketMessage.ticket_id).order_by(
+        TicketMessage.ticket_id, TicketMessage.created_at.desc()
+    )
+    rows = await db.execute(q)
+    return {m.ticket_id: m for m in rows.scalars().all()}
+
+
+async def get_categories_map(
+    db: AsyncSession, *, ids: list[int],
+) -> dict[int, TicketCategorySpec]:
+    if not ids:
+        return {}
+    rows = await db.execute(
+        select(TicketCategorySpec).where(TicketCategorySpec.id.in_(ids))
+    )
+    return {c.id: c for c in rows.scalars().all()}
+
+
+async def get_users_map(
+    db: AsyncSession, *, ids: list[int],
+) -> dict[int, User]:
+    """Batch-loader для UserMini в карточках."""
+    if not ids:
+        return {}
+    rows = await db.execute(select(User).where(User.id.in_(ids)))
+    return {u.id: u for u in rows.scalars().all()}
+
+
+async def list_active_categories(db: AsyncSession) -> list[TicketCategorySpec]:
+    rows = await db.execute(
+        select(TicketCategorySpec)
+        .where(TicketCategorySpec.is_active.is_(True))
+        .order_by(TicketCategorySpec.sort_order, TicketCategorySpec.id)
+    )
+    return list(rows.scalars().all())

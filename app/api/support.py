@@ -14,7 +14,7 @@
 import asyncio
 import json
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +40,7 @@ from app.schemas.support import (
     TicketOutUser,
 )
 from app.services.support import messages as svc_messages
+from app.services.support import notifications as svc_notify
 from app.services.support import realtime
 from app.services.support import tickets as svc_tickets
 
@@ -140,7 +141,7 @@ async def create_ticket(
     """Создание тикета. priority подтянется из category.default_priority.
     Auto-greet system-message добавляется внутри сервиса (если настройка
     включена). После commit'а — broadcast в admin SSE."""
-    ticket = await svc_tickets.create_ticket(
+    ticket, first_msg = await svc_tickets.create_ticket(
         db,
         author=ctx.user,
         category_slug=body.category_slug,
@@ -150,8 +151,11 @@ async def create_ticket(
     )
     await db.commit()
     await db.refresh(ticket)
+    await db.refresh(first_msg)
 
     realtime.emit_ticket_created(ticket)
+    realtime.emit_message(ticket, first_msg)
+    asyncio.create_task(svc_notify.notify_new_user_message(ticket.id, first_msg.id))
 
     cat = (await svc_tickets.get_categories_map(db, ids=[ticket.category_id]))[ticket.category_id]
     return _ticket_out_user(ticket, cat)
@@ -229,6 +233,7 @@ async def post_message(
     realtime.emit_message(ticket, msg)
     if ticket.status != old_status:
         realtime.emit_status_change(ticket, old_status, ticket.status, ctx.user.id)
+    asyncio.create_task(svc_notify.notify_new_user_message(ticket.id, msg.id))
 
     return _msg_out_user(msg)
 

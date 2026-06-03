@@ -10,21 +10,27 @@ from app.api.router import api_router
 from app.core.autocancel import autocancel_loop
 from app.core.config import settings
 from app.core.exceptions import APIError
+from app.services.support.auto_close import loop as support_auto_close_loop
 
 logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(autocancel_loop())
+    background = [
+        asyncio.create_task(autocancel_loop()),
+        asyncio.create_task(support_auto_close_loop()),
+    ]
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        for t in background:
+            t.cancel()
+        for t in background:
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(title=settings.service_name, version=settings.version, lifespan=lifespan)

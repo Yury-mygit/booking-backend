@@ -85,14 +85,15 @@ async def create_ticket(
     source: TicketSource,
     title: str | None = None,
     priority: TicketPriority | None = None,
-) -> Ticket:
+) -> tuple[Ticket, TicketMessage]:
     """Создаёт Ticket + first user message + auto-greet (если enabled)
-    + TicketEvent(created). Без commit'а."""
+    + TicketEvent(created). Без commit'а. Возвращает (ticket, first_msg)
+    — second value нужен для TG-нотификации и SSE-emit с msg.id."""
     category = await get_category_by_slug(db, category_slug)
-    settings = await get_settings(db)
+    settings_row = await get_settings(db)
 
     eff_priority = priority or category.default_priority
-    resp_due, res_due = compute_due(eff_priority, settings)
+    resp_due, res_due = compute_due(eff_priority, settings_row)
 
     ticket = Ticket(
         user_id=author.id,
@@ -125,7 +126,7 @@ async def create_ticket(
 
     # auto-greet (system message от имени автора — sender_user_id NOT NULL).
     # sender_kind=system отличает её визуально на клиенте.
-    if settings.auto_greet_enabled:
+    if settings_row.auto_greet_enabled:
         greet = _AUTO_GREET.get(ticket.language, _AUTO_GREET[Lang.en])
         db.add(TicketMessage(
             ticket_id=ticket.id,
@@ -135,7 +136,7 @@ async def create_ticket(
         ))
 
     await db.flush()
-    return ticket
+    return ticket, first_msg
 
 
 # ─── list (user-side) ────────────────────────────────────────────────

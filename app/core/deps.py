@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Query
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,8 +56,14 @@ async def _resolve_session(
 
 async def current_user(
     authorization: str | None = Header(default=None),
+    token: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> AuthContext:
+    # SSE workaround: EventSource не может выставить Authorization header,
+    # поэтому фронт фолбэчит на ?token=. Header > query (если оба есть —
+    # header правит).
+    if authorization is None and token:
+        authorization = f"Bearer {token}"
     return await _resolve_session(authorization, db)
 
 

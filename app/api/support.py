@@ -44,7 +44,7 @@ from app.services.support import notifications as svc_notify
 from app.services.support import realtime
 from app.services.support import tickets as svc_tickets
 
-router = APIRouter(prefix="/api/v1/support", tags=["support"])
+router = APIRouter(prefix="/support", tags=["support"])
 
 
 _HEARTBEAT_SECONDS = 30

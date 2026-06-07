@@ -6,6 +6,7 @@ from app.api import (
     chat_client,
     client,
     events,
+    media_refs,
     partner,
     payments,
     public,
@@ -28,3 +29,4 @@ api_router.include_router(support.router)
 api_router.include_router(tg.router)
 api_router.include_router(uploads.router)
 api_router.include_router(qr.router)
+api_router.include_router(media_refs.router)

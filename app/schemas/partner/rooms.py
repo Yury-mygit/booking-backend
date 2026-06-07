@@ -1,8 +1,9 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from app.models.models import AvailabilityStatus, Room
+from app.services.photo_format import to_response_url, to_response_urls
 
 
 class RoomCreate(BaseModel):
@@ -52,6 +53,10 @@ class RoomPartnerView(BaseModel):
     photos: list[str]
     created_at: datetime
 
+    @field_serializer("photos")
+    def _ser_photos(self, v: list[str]) -> list[str]:
+        return to_response_urls(v)
+
     @classmethod
     def from_model(cls, r: Room) -> "RoomPartnerView":
         return cls(
@@ -85,3 +90,7 @@ class RoomFlatView(BaseModel):
     price_kgs: int
     today_status: AvailabilityStatus  # free / blocked / booked
     photo: str | None  # first photo of the room (or None)
+
+    @field_serializer("photo")
+    def _ser_photo(self, v: str | None) -> str | None:
+        return to_response_url(v)

@@ -5,9 +5,10 @@
 """
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from app.models.models import ChatSenderKind, ChatSubjectType
+from app.services.photo_format import to_response_url
 
 
 class OpenThreadRequest(BaseModel):
@@ -28,6 +29,10 @@ class HotelMini(BaseModel):
     slug: str
     name_ru: str
     photo: str | None = None
+
+    @field_serializer("photo")
+    def _ser_photo(self, v: str | None) -> str | None:
+        return to_response_url(v)
 
 
 class ThreadView(BaseModel):

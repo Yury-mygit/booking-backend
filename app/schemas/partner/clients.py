@@ -1,8 +1,9 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from app.models.models import Client, DocKind
+from app.services.photo_format import to_response_url
 
 
 class ClientPartnerView(BaseModel):
@@ -19,6 +20,10 @@ class ClientPartnerView(BaseModel):
     last_booking_date: date | None
     has_unread_chat: bool = False
     created_at: datetime
+
+    @field_serializer("photo_url")
+    def _ser_photo_url(self, v: str | None) -> str | None:
+        return to_response_url(v)
 
     @classmethod
     def from_model(

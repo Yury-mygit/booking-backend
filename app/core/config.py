@@ -28,8 +28,19 @@ class Settings(BaseSettings):
 
     dev_mode: bool = False
 
+    # storage_path сейчас используется только qr.py (QR-коды клиентов).
+    # Photo-storage съехал в media-сервис (Stage 2 + 5 booking → media,
+    # 2026-06-07). После миграции QR в media volume можно удалить.
     storage_path: str = "/app/storage"
     photo_max_bytes: int = 5 * 1024 * 1024
+
+    # media-сервис (карта 2026-05-27-booking-media-migration.md, Stage 1).
+    # Внутренний URL — server-to-server в docker `shared` сети без Caddy.
+    # Публичный — для построения URL'ов в ответах API (фронт получает абсолют).
+    media_internal_url: str = "http://media_dev_app:8000"
+    media_public_base: str = "https://media.dev.raftforge.art"
+    # Токен для эндпоинта /api/v1/media-refs (GC консьюмер). Шлёт media.
+    media_gc_token: str = ""
 
 
 settings = Settings()

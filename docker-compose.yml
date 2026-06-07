@@ -18,6 +18,9 @@ services:
       - DEV_MODE=${DEV_MODE:-false}
       - PUBLIC_BASE_APP=${PUBLIC_BASE_APP:-https://book.dev.raftforge.art/}
       - CHAT_TG_NOTIFICATIONS_ENABLED=${CHAT_TG_NOTIFICATIONS_ENABLED:-true}
+      - MEDIA_INTERNAL_URL=${MEDIA_INTERNAL_URL:-http://media_dev_app:8000}
+      - MEDIA_PUBLIC_BASE=${MEDIA_PUBLIC_BASE:-https://media.dev.raftforge.art}
+      - MEDIA_GC_TOKEN=${MEDIA_GC_TOKEN:-}
     volumes:
       - booking_storage:/app/storage
     healthcheck:

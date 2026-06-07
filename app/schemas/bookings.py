@@ -1,8 +1,9 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from app.models.models import BookingStatus
+from app.services.photo_format import to_response_url, to_response_urls
 
 
 class CreateBookingRequest(BaseModel):
@@ -15,6 +16,10 @@ class CreateBookingRequest(BaseModel):
 class BookingMediaResponse(BaseModel):
     hotel_photos: list[str]
     room_photos: list[str]
+
+    @field_serializer("hotel_photos", "room_photos")
+    def _ser_photos(self, v: list[str]) -> list[str]:
+        return to_response_urls(v)
 
 
 class BookingResponse(BaseModel):
@@ -32,3 +37,7 @@ class BookingResponse(BaseModel):
     postpay: bool
     confirmed: bool
     created_at: datetime
+
+    @field_serializer("hotel_photo")
+    def _ser_hotel_photo(self, v: str | None) -> str | None:
+        return to_response_url(v)

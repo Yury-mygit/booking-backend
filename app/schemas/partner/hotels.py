@@ -1,8 +1,9 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from app.models.models import Hotel, HotelStatus, MealsKind
+from app.services.photo_format import to_response_urls
 
 
 class HotelCreate(BaseModel):
@@ -83,6 +84,10 @@ class HotelPartnerView(BaseModel):
     published_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("photos")
+    def _ser_photos(self, v: list[str]) -> list[str]:
+        return to_response_urls(v)
 
     @classmethod
     def from_model(cls, h: Hotel) -> "HotelPartnerView":

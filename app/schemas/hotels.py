@@ -1,8 +1,9 @@
 from datetime import date
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from app.models.models import MealsKind
+from app.services.photo_format import to_response_urls
 
 
 class HotelListItem(BaseModel):
@@ -19,6 +20,10 @@ class HotelListItem(BaseModel):
     photos: list[str]
     meals: MealsKind
     min_price_kgs: int | None
+
+    @field_serializer("photos")
+    def _ser_photos(self, v: list[str]) -> list[str]:
+        return to_response_urls(v)
 
 
 class RoomCard(BaseModel):
@@ -37,6 +42,10 @@ class RoomCard(BaseModel):
     photos: list[str]
     available_for_dates: bool | None = None
     total_kgs_for_dates: int | None = None
+
+    @field_serializer("photos")
+    def _ser_photos(self, v: list[str]) -> list[str]:
+        return to_response_urls(v)
 
 
 class ServicePublicView(BaseModel):
@@ -64,6 +73,10 @@ class HotelDetails(BaseModel):
     meals: MealsKind
     rooms: list[RoomCard]
     services: list[ServicePublicView]
+
+    @field_serializer("photos")
+    def _ser_photos(self, v: list[str]) -> list[str]:
+        return to_response_urls(v)
 
 
 class HotelSearchQuery(BaseModel):

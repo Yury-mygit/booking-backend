@@ -28,7 +28,6 @@ from app.schemas.support import (
     UserMini,
 )
 from app.services.support import chat as svc_chat
-from app.services.support import notifications as svc_notify
 from app.services.support import realtime
 
 router = APIRouter(prefix="/support", tags=["admin-support"])
@@ -142,9 +141,6 @@ async def post_admin_message(
     realtime.emit_message(
         t_id, owner_user_id, block_value, msg_id,
         sender_kind, body, created_at_iso,
-    )
-    asyncio.create_task(
-        svc_notify.notify_user_on_admin_message(t_id, msg_id)
     )
 
     return MessageOut.model_validate(msg)

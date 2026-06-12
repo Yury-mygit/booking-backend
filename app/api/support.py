@@ -26,7 +26,6 @@ from app.schemas.support import (
     ThreadOutUser,
 )
 from app.services.support import chat as svc_chat
-from app.services.support import notifications as svc_notify
 from app.services.support import realtime
 
 router = APIRouter(prefix="/support", tags=["support"])
@@ -93,9 +92,6 @@ async def post_my_message(
     realtime.emit_message(
         thread_id, user_id, block_value, msg_id,
         sender_kind, body, created_at_iso,
-    )
-    asyncio.create_task(
-        svc_notify.notify_admins_on_user_message(thread_id, msg_id)
     )
 
     return MessageOut.model_validate(msg)

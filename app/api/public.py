@@ -10,6 +10,7 @@ GET /public/hotels/{slug_or_id} — детальная карточка + ком
 SSE на `/public/hotels/{slug}/events` живёт в `events.py`.
 """
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, exists, func, not_, select
@@ -109,6 +110,7 @@ async def hotel_details(
     check_in: date | None = Query(default=None),
     check_out: date | None = Query(default=None),
     guests: int = Query(default=1, ge=1, le=20),
+    beds: Literal["single", "double"] | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> HotelDetails:
     _validate_date_range(check_in, check_out)
@@ -127,10 +129,21 @@ async def hotel_details(
         (await db.execute(select(Room).where(Room.hotel_id == hotel_id))).scalars().all()
     )
 
-    # Per-room availability + total_kgs for dates.
+    # capacity/beds filter (same shape as frontend «1+1» / «2 гостя» / family).
+    def matches_beds(r: Room) -> bool:
+        if beds == "single":
+            return r.single_beds >= 2
+        if beds == "double":
+            return r.double_beds >= 1
+        return r.capacity >= guests
+
+    rooms = [r for r in rooms if matches_beds(r)]
+
+    # Per-room availability + total_kgs for dates. Sourced even when no
+    # filter applies so that surviving cards still get total_kgs_for_dates.
     cards: list[RoomCard] = []
     avail_by_room: dict[int, dict[date, Availability]] = {}
-    if check_in and check_out:
+    if check_in and check_out and rooms:
         rows = (
             await db.execute(
                 select(Availability).where(
@@ -144,14 +157,18 @@ async def hotel_details(
             avail_by_room.setdefault(av.room_id, {})[av.date] = av
 
     for r in rooms:
-        if check_in and check_out and r.capacity >= guests:
+        if check_in and check_out:
             day_map = avail_by_room.get(r.id, {})
             blocked = any(
                 day_map.get(d) is not None
                 and day_map[d].status in (AvailabilityStatus.blocked, AvailabilityStatus.booked)
                 for d in date_range_nights(check_in, check_out)
             )
-            available = not blocked
+            if blocked:
+                # Дропаем недоступные на эти даты — фронт уже не показывает
+                # «Недоступно» disabled-карточки.
+                continue
+            available = True
             total = sum(
                 (day_map[d].price_override if d in day_map and day_map[d].price_override is not None else r.price_kgs)
                 for d in date_range_nights(check_in, check_out)

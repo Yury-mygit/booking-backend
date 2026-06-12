@@ -1,288 +1,154 @@
-"""User-side Support API: `/api/v1/support/*`.
+"""User-side support chat API: `/api/v1/support/*` (карта #92).
 
-Любой залогиненный юзер (client / partner / partner-staff) пишет
-в поддержку через эти endpoints. Admin-side endpoints — отдельно
-в `api/admin/support/` (Этап 3).
+Любой залогиненный user пишет в свой thread по `block`
+(client/partner). Один user может иметь два независимых thread'а.
+Thread создаётся лениво на первое сообщение.
 
-Защита:
-- Auth — `Depends(current_user)` (booking session cookie / Bearer).
-- Ownership — на каждом запросе проверяется `ticket.user_id == ctx.user.id`.
-- is_internal сообщения никогда не уходят клиенту (фильтрация в БД-запросе
-  + физическое отсутствие поля в `MessageOutUser`).
+Admin endpoints — отдельно в `api/admin/support.py`.
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import AuthContext, current_user
-from app.core.exceptions import APIError
-from app.models.models import Lang, User
-from app.models.support import (
-    Ticket,
-    TicketCategorySpec,
-    TicketMessage,
-    TicketSenderKind,
-    TicketSource,
-    TicketStatus,
-)
+from app.models.support import SupportBlock, SupportSenderKind
 from app.schemas.support import (
-    CategoryOut,
-    MessageCreateUserIn,
-    MessageOutUser,
-    Page,
-    TicketCreateUserIn,
-    TicketListItemUser,
-    TicketOutUser,
+    MessageCreateUser,
+    MessageOut,
+    ReadMarkUser,
+    ThreadOutUser,
 )
-from app.services.support import messages as svc_messages
+from app.services.support import chat as svc_chat
 from app.services.support import notifications as svc_notify
 from app.services.support import realtime
-from app.services.support import tickets as svc_tickets
 
 router = APIRouter(prefix="/support", tags=["support"])
-
 
 _HEARTBEAT_SECONDS = 30
 
 
-# ─── converters ─────────────────────────────────────────────────────
-
-
-def _category_out(cat: TicketCategorySpec, lang: Lang) -> CategoryOut:
-    name = {Lang.ru: cat.name_ru, Lang.en: cat.name_en, Lang.ky: cat.name_ky}[lang]
-    return CategoryOut(
-        id=cat.id, slug=cat.slug, name=name, icon=cat.icon,
-        default_priority=cat.default_priority,
-    )
-
-
-def _msg_out_user(m: TicketMessage) -> MessageOutUser:
-    return MessageOutUser(
-        id=m.id, ticket_id=m.ticket_id, sender_kind=m.sender_kind,
-        body=m.body, created_at=m.created_at, edited_at=m.edited_at,
-    )
-
-
-def _ticket_out_user(t: Ticket, cat: TicketCategorySpec) -> TicketOutUser:
-    unread = bool(
-        t.last_admin_msg_at
-        and (t.user_last_read_at is None or t.user_last_read_at < t.last_admin_msg_at)
-    )
-    return TicketOutUser(
-        number=t.number, title=t.title,
-        category=_category_out(cat, t.language),
-        status=t.status, language=t.language,
-        created_at=t.created_at, updated_at=t.updated_at, closed_at=t.closed_at,
-        last_admin_msg_at=t.last_admin_msg_at,
-        user_last_read_at=t.user_last_read_at,
-        unread_for_user=unread,
-    )
-
-
-def _list_item_user(
-    t: Ticket, last: TicketMessage | None, cat: TicketCategorySpec,
-) -> TicketListItemUser:
-    unread = bool(
-        t.last_admin_msg_at
-        and (t.user_last_read_at is None or t.user_last_read_at < t.last_admin_msg_at)
-    )
-    preview = last.body if last else ""
-    last_at = last.created_at if last else t.created_at
-    return TicketListItemUser(
-        number=t.number, title=t.title,
-        category=_category_out(cat, t.language),
-        status=t.status,
-        last_message_preview=preview[:140] + ("…" if len(preview) > 140 else ""),
-        last_message_at=last_at,
-        unread=unread,
-    )
-
-
-def _ensure_owner(ticket: Ticket, ctx: AuthContext) -> None:
-    if ticket.user_id != ctx.user.id:
-        # Не раскрываем существование тикета (404, не 403) — чужие тикеты невидимы.
-        raise APIError(404, "ticket_not_found", "Ticket not found")
-
-
-def _detect_source(user: User) -> TicketSource:
-    """client/partner_topbar по продуктовой роли. partner-staff считается
-    partner_topbar — он работает в partner-блоке SPA."""
-    return (
-        TicketSource.partner_topbar
-        if user.role.value == "partner"
-        else TicketSource.client_topbar
-    )
-
-
-# ─── endpoints ──────────────────────────────────────────────────────
-
-
-@router.get("/categories", response_model=list[CategoryOut])
-async def list_categories(
+@router.get("/thread", response_model=ThreadOutUser | None)
+async def get_my_thread(
+    block: SupportBlock = Query(...),
     ctx: AuthContext = Depends(current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[CategoryOut]:
-    """Активные категории с именами на языке текущего юзера."""
-    cats = await svc_tickets.list_active_categories(db)
-    return [_category_out(c, ctx.user.lang) for c in cats]
+) -> ThreadOutUser | None:
+    thread = await svc_chat.get_thread(db, ctx.user.id, block)
+    if thread is None:
+        return None
+    return ThreadOutUser(
+        id=thread.id,
+        block=thread.block,
+        last_message_at=thread.last_message_at,
+        has_unread=svc_chat.has_unread_for_user(thread),
+    )
 
 
-@router.post("/tickets", response_model=TicketOutUser, status_code=201)
-async def create_ticket(
-    body: TicketCreateUserIn,
+@router.get("/thread/messages", response_model=list[MessageOut])
+async def get_my_messages(
+    block: SupportBlock = Query(...),
+    before_id: int | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
     ctx: AuthContext = Depends(current_user),
     db: AsyncSession = Depends(get_db),
-) -> TicketOutUser:
-    """Создание тикета. priority подтянется из category.default_priority.
-    Auto-greet system-message добавляется внутри сервиса (если настройка
-    включена). После commit'а — broadcast в admin SSE."""
-    ticket, first_msg = await svc_tickets.create_ticket(
-        db,
-        author=ctx.user,
-        category_slug=body.category_slug,
-        body=body.body,
-        title=body.title,
-        source=_detect_source(ctx.user),
-    )
-    await db.commit()
-    await db.refresh(ticket)
-    await db.refresh(first_msg)
-
-    realtime.emit_ticket_created(ticket)
-    realtime.emit_message(ticket, first_msg)
-    asyncio.create_task(svc_notify.notify_new_user_message(ticket.id, first_msg.id))
-
-    cat = (await svc_tickets.get_categories_map(db, ids=[ticket.category_id]))[ticket.category_id]
-    return _ticket_out_user(ticket, cat)
+) -> list[MessageOut]:
+    thread = await svc_chat.get_thread(db, ctx.user.id, block)
+    if thread is None:
+        return []
+    msgs = await svc_chat.list_messages(db, thread.id, before_id, limit)
+    return [MessageOut.model_validate(m) for m in msgs]
 
 
-@router.get("/tickets", response_model=Page)
-async def list_my_tickets(
-    status: str = "all",  # open | closed | all
-    limit: int = 50,
-    offset: int = 0,
+@router.post("/thread/messages", response_model=MessageOut)
+async def post_my_message(
+    payload: MessageCreateUser,
     ctx: AuthContext = Depends(current_user),
     db: AsyncSession = Depends(get_db),
-) -> Page:
-    if limit < 1 or limit > 200:
-        raise APIError(400, "bad_limit", "limit must be 1..200")
-    if status not in {"open", "closed", "all"}:
-        raise APIError(400, "bad_status", "status must be open|closed|all")
-
-    tickets_list, total = await svc_tickets.list_user_tickets(
-        db, user_id=ctx.user.id, status_filter=status, limit=limit, offset=offset,
+) -> MessageOut:
+    thread, created = await svc_chat.get_or_create_thread(
+        db, ctx.user.id, payload.block
     )
-    if not tickets_list:
-        return Page(items=[], total=total, limit=limit, offset=offset)
-
-    ids = [t.id for t in tickets_list]
-    cat_ids = list({t.category_id for t in tickets_list})
-    last_map = await svc_tickets.get_last_messages_map(
-        db, ticket_ids=ids, include_internal=False,
+    msg, _ = await svc_chat.send_message(
+        db, thread, ctx.user.id, SupportSenderKind.user, payload.body
     )
-    cat_map = await svc_tickets.get_categories_map(db, ids=cat_ids)
 
-    items = [_list_item_user(t, last_map.get(t.id), cat_map[t.category_id]) for t in tickets_list]
-    return Page(items=items, total=total, limit=limit, offset=offset)
+    # Локалы для post-commit emit/notify.
+    thread_id = thread.id
+    block_value = thread.block.value
+    msg_id = msg.id
+    sender_kind = msg.sender_kind.value
+    body = msg.body
+    created_at_iso = msg.created_at.isoformat()
+    user_id = ctx.user.id
+
+    if created:
+        realtime.emit_thread_created(thread_id, user_id, block_value)
+    realtime.emit_message(
+        thread_id, user_id, block_value, msg_id,
+        sender_kind, body, created_at_iso,
+    )
+    asyncio.create_task(
+        svc_notify.notify_admins_on_user_message(thread_id, msg_id)
+    )
+
+    return MessageOut.model_validate(msg)
 
 
-@router.get("/tickets/{number}", response_model=dict)
-async def get_my_ticket(
-    number: str,
+@router.post("/thread/read", status_code=204)
+async def mark_my_read(
+    payload: ReadMarkUser,
     ctx: AuthContext = Depends(current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict:
-    """Возвращает {ticket: TicketOutUser, messages: list[MessageOutUser]}.
-    Internal-сообщения отсутствуют в ответе физически (фильтрация в БД)."""
-    ticket, msgs = await svc_tickets.get_ticket_with_messages(
-        db, number=number, include_internal=False,
+) -> Response:
+    thread = await svc_chat.get_thread(db, ctx.user.id, payload.block)
+    if thread is None:
+        return Response(status_code=204)
+    await svc_chat.mark_read(
+        db, thread, SupportSenderKind.user, payload.up_to_message_id
     )
-    _ensure_owner(ticket, ctx)
-    cat = (await svc_tickets.get_categories_map(db, ids=[ticket.category_id]))[ticket.category_id]
-    return {
-        "ticket": _ticket_out_user(ticket, cat).model_dump(mode="json"),
-        "messages": [_msg_out_user(m).model_dump(mode="json") for m in msgs],
-    }
-
-
-@router.post("/tickets/{number}/messages", response_model=MessageOutUser, status_code=201)
-async def post_message(
-    number: str,
-    body: MessageCreateUserIn,
-    ctx: AuthContext = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
-) -> MessageOutUser:
-    """Юзер пишет в свой тикет. Auto-status transition внутри send()."""
-    ticket = await svc_tickets.get_ticket_by_number(db, number)
-    _ensure_owner(ticket, ctx)
-
-    old_status = ticket.status
-    msg = await svc_messages.send(
-        db, ticket=ticket, sender=ctx.user,
-        sender_kind=TicketSenderKind.user, body=body.body,
-    )
-    await db.commit()
-    await db.refresh(msg)
-    await db.refresh(ticket)
-
-    realtime.emit_message(ticket, msg)
-    if ticket.status != old_status:
-        realtime.emit_status_change(ticket, old_status, ticket.status, ctx.user.id)
-    asyncio.create_task(svc_notify.notify_new_user_message(ticket.id, msg.id))
-
-    return _msg_out_user(msg)
-
-
-@router.post("/tickets/{number}/read", status_code=204)
-async def mark_read(
-    number: str,
-    ctx: AuthContext = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
-) -> None:
-    ticket = await svc_tickets.get_ticket_by_number(db, number)
-    _ensure_owner(ticket, ctx)
-    await svc_tickets.mark_read(db, ticket=ticket, side="user")
-    await db.commit()
-
-
-# ─── SSE (user-scoped) ──────────────────────────────────────────────
+    return Response(status_code=204)
 
 
 @router.get("/events/sse")
 async def sse_user(
     request: Request,
+    block: SupportBlock = Query(...),
     ctx: AuthContext = Depends(current_user),
 ) -> StreamingResponse:
-    """SSE: новые admin-сообщения (без internal) + статус-изменения
-    по моим тикетам. Heartbeat 30с (как в `api/events.py`).
-    Caddy для этого пути требует `flush_interval -1`.
-    """
     user_id = ctx.user.id
+    block_value = block.value
 
     async def gen():
         yield "retry: 5000\n\n"
-        sub = realtime.subscribe_user(user_id)
+        sub = realtime.subscribe_user(user_id, block_value)
         try:
             while True:
                 if await request.is_disconnected():
                     break
                 try:
-                    event = await asyncio.wait_for(sub.__anext__(), timeout=_HEARTBEAT_SECONDS)
+                    event = await asyncio.wait_for(
+                        sub.__anext__(), timeout=_HEARTBEAT_SECONDS
+                    )
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
-                yield f"data: {json.dumps(event)}\n\n"
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         finally:
             await sub.aclose()
 
-    headers = {
-        "Cache-Control": "no-cache, no-transform",
-        "X-Accel-Buffering": "no",
-        "Connection": "keep-alive",
-    }
-    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

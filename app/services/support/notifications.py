@@ -1,39 +1,41 @@
-"""TG-уведомления для support.
+"""TG-уведомления для support-чата (карта #92).
 
-Контракт:
-- User написал в тикет / создал тикет → личка `assignee` (если есть),
-  иначе всем активным `is_lead=true`, иначе всем активным agent'ам.
-- Agent написал public → личка user'у (по `users.telegram_id`).
-- Agent написал internal → молча (между агентами — отдельная задача v1.5).
-- Status change (resolved/closed/reopened) → личка user'у.
+Контракт упрощённый:
+- User написал → DM всем active admin'ам (role=admin OR is_superadmin,
+  bot не заблокирован).
+- Admin написал → DM user'у — владельцу thread'а.
 
 Вызов: fire-and-forget через `asyncio.create_task(...)` из API-роутов
-**после `db.commit()`**. Своя `AsyncSession` внутри — чтобы не дёргать
-expired-attributes из закрытой сессии вызывающего.
+после `db.commit()`. Своя `AsyncSession` внутри — чтобы не дёргать
+expired-attributes из закрытой сессии вызывающего
+(`feedback_async_sqlalchemy_post_commit`).
 
-`_send` дублирует httpx-логику из `tg_notifications.py` (10 строк) —
-осознанно, чтобы не делать сейчас рефакторинг рабочего модуля под
-свою сторону. Когда оба домена пойдут на унификацию tg-уровня — будет
-общий `services/tg_client.py`.
+`_send` дублирует httpx-логику из `tg_notifications.py` — осознанно,
+как было в v1; общий `services/tg_client.py` появится при унификации.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Sequence
 
 import httpx
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.models.models import Lang, User
-from app.models.support import SupportAgent, Ticket, TicketMessage, TicketStatus
+from app.models.models import Lang, User, UserRole
+from app.models.support import (
+    SupportBlock,
+    SupportMessage,
+    SupportThread,
+)
 
 log = logging.getLogger("support.notify")
 
 
-# ─── localized templates ────────────────────────────────────────────
+# ─── localized templates ──────────────────────────────────────────────
 
 
 _BTN: dict[Lang, str] = {
@@ -42,37 +44,25 @@ _BTN: dict[Lang, str] = {
     Lang.ky: "Ачуу",
 }
 
-_TPL_AGENT_NEW = {  # юзер → агент
-    Lang.ru: "🆘 Поддержка: новое обращение {num}\nОт: {who}\n{preview}",
-    Lang.en: "🆘 Support: new ticket {num}\nFrom: {who}\n{preview}",
-    Lang.ky: "🆘 Колдоо: жаңы билдирүү {num}\nКимден: {who}\n{preview}",
+_TPL_ADMIN_NEW = {
+    Lang.ru: "🆘 Поддержка — новое сообщение от {who} [{block}]\n{preview}",
+    Lang.en: "🆘 Support — new message from {who} [{block}]\n{preview}",
+    Lang.ky: "🆘 Колдоо — {who} [{block}] жаңы билдирүү жөнөттү\n{preview}",
 }
 
-_TPL_USER_REPLY = {  # агент → юзер
-    Lang.ru: "💬 Поддержка по {num}\n{preview}",
-    Lang.en: "💬 Support — {num}\n{preview}",
-    Lang.ky: "💬 Колдоо — {num}\n{preview}",
-}
-
-_TPL_STATUS = {
-    (Lang.ru, TicketStatus.resolved): "✅ Обращение {num} помечено решённым.",
-    (Lang.ru, TicketStatus.closed): "🗄 Обращение {num} закрыто.",
-    (Lang.ru, TicketStatus.pending_admin): "🔄 Обращение {num} переоткрыто.",
-    (Lang.en, TicketStatus.resolved): "✅ Ticket {num} marked resolved.",
-    (Lang.en, TicketStatus.closed): "🗄 Ticket {num} closed.",
-    (Lang.en, TicketStatus.pending_admin): "🔄 Ticket {num} reopened.",
-    (Lang.ky, TicketStatus.resolved): "✅ {num} билдирүүсү чечилди.",
-    (Lang.ky, TicketStatus.closed): "🗄 {num} билдирүүсү жабылды.",
-    (Lang.ky, TicketStatus.pending_admin): "🔄 {num} билдирүүсү кайра ачылды.",
+_TPL_USER_REPLY = {
+    Lang.ru: "💬 Поддержка\n{preview}",
+    Lang.en: "💬 Support\n{preview}",
+    Lang.ky: "💬 Колдоо\n{preview}",
 }
 
 
-# ─── low-level send ────────────────────────────────────────────────
+# ─── helpers ──────────────────────────────────────────────────────────
 
 
-def _deep_link(start_param: str) -> str:
+def _deep_link(block: SupportBlock) -> str:
     base = settings.public_base_app.rstrip("/") + "/"
-    return f"{base}?startapp={start_param}"
+    return f"{base}?startapp=support_{block.value}"
 
 
 def _preview(body: str, limit: int = 160) -> str:
@@ -84,8 +74,7 @@ def _who(u: User) -> str:
     name = f"{u.first_name or ''} {u.last_name or ''}".strip()
     if not name:
         name = u.username or f"id:{u.telegram_id}"
-    role = u.role.value
-    return f"{name} [{role}]"
+    return f"{name} [{u.role.value}]"
 
 
 async def _send(chat_id: int, text: str, deep_link: str, btn: str) -> int:
@@ -119,121 +108,78 @@ async def _set_blocked(db: AsyncSession, user_id: int, blocked: bool) -> None:
     await db.commit()
 
 
-async def _deliver(db: AsyncSession, recipient: User, text: str, start_param: str) -> None:
+async def _deliver(
+    db: AsyncSession, recipient: User, text: str, block: SupportBlock
+) -> None:
     if recipient.bot_blocked_or_unreachable:
-        return  # уважение к пометке; SPA баннер просит /start
+        return
     btn = _BTN.get(recipient.lang, _BTN[Lang.en])
-    status = await _send(recipient.telegram_id, text, _deep_link(start_param), btn)
+    status = await _send(recipient.telegram_id, text, _deep_link(block), btn)
     if status == 200:
         return
     if status in (400, 403):
         await _set_blocked(db, recipient.id, True)
 
 
-# ─── recipient resolvers ───────────────────────────────────────────
+async def _list_admin_recipients(db: AsyncSession) -> Sequence[User]:
+    """role=admin OR is_superadmin, bot не заблокирован."""
+    res = await db.execute(
+        select(User).where(
+            or_(User.role == UserRole.admin, User.is_superadmin.is_(True)),
+            User.bot_blocked_or_unreachable.is_(False),
+            User.telegram_id.is_not(None),
+        )
+    )
+    return res.scalars().all()
 
 
-async def _agents_recipients(db: AsyncSession, ticket: Ticket) -> list[User]:
-    """assignee → leads → все активные agent'ы."""
-    if ticket.assignee_id is not None:
-        u = await db.get(User, ticket.assignee_id)
-        return [u] if u else []
-    # active leads first
-    leads = (await db.execute(
-        select(User)
-        .join(SupportAgent, SupportAgent.user_id == User.id)
-        .where(SupportAgent.removed_at.is_(None), SupportAgent.is_lead.is_(True))
-    )).scalars().all()
-    if leads:
-        return list(leads)
-    # fallback: всем активным
-    all_agents = (await db.execute(
-        select(User)
-        .join(SupportAgent, SupportAgent.user_id == User.id)
-        .where(SupportAgent.removed_at.is_(None))
-    )).scalars().all()
-    return list(all_agents)
+# ─── public API ───────────────────────────────────────────────────────
 
 
-# ─── public API ────────────────────────────────────────────────────
-
-
-async def notify_new_user_message(ticket_id: int, msg_id: int) -> None:
-    """user-msg (или новый тикет) → agent'ам."""
+async def notify_admins_on_user_message(thread_id: int, msg_id: int) -> None:
+    """user написал → DM всем admin'ам."""
     if not settings.tg_bot_token:
         return
     async with AsyncSessionLocal() as db:
-        ticket = await db.get(Ticket, ticket_id)
-        if ticket is None:
+        thread = await db.get(SupportThread, thread_id)
+        if thread is None:
             return
-        msg = await db.get(TicketMessage, msg_id)
+        msg = await db.get(SupportMessage, msg_id)
         if msg is None:
             return
-        author = await db.get(User, ticket.user_id)
+        author = await db.get(User, thread.user_id)
         if author is None:
             return
 
-        recipients = await _agents_recipients(db, ticket)
+        recipients = await _list_admin_recipients(db)
         if not recipients:
             return
 
         for r in recipients:
-            text = _TPL_AGENT_NEW.get(r.lang, _TPL_AGENT_NEW[Lang.en]).format(
-                num=ticket.number, who=_who(author), preview=_preview(msg.body),
+            tpl = _TPL_ADMIN_NEW.get(r.lang, _TPL_ADMIN_NEW[Lang.en])
+            text = tpl.format(
+                who=_who(author),
+                block=thread.block.value,
+                preview=_preview(msg.body),
             )
-            await _deliver(db, r, text, start_param=f"support_{ticket.number}")
+            await _deliver(db, r, text, thread.block)
 
 
-async def notify_user_reply(ticket_id: int, msg_id: int) -> None:
-    """agent public message → юзеру. Internal — не зовём отсюда."""
+async def notify_user_on_admin_message(thread_id: int, msg_id: int) -> None:
+    """admin написал → DM владельцу thread'а."""
     if not settings.tg_bot_token:
         return
     async with AsyncSessionLocal() as db:
-        ticket = await db.get(Ticket, ticket_id)
-        if ticket is None:
+        thread = await db.get(SupportThread, thread_id)
+        if thread is None:
             return
-        msg = await db.get(TicketMessage, msg_id)
-        if msg is None or msg.is_internal:
+        msg = await db.get(SupportMessage, msg_id)
+        if msg is None:
             return
-        user = await db.get(User, ticket.user_id)
+        user = await db.get(User, thread.user_id)
         if user is None:
             return
 
-        text = _TPL_USER_REPLY.get(user.lang, _TPL_USER_REPLY[Lang.en]).format(
-            num=ticket.number, preview=_preview(msg.body),
-        )
-        await _deliver(db, user, text, start_param=f"support_{ticket.number}")
-
-
-async def notify_user_status_change(ticket_id: int, new_status_value: str) -> None:
-    """resolved / closed / reopened (pending_admin) → юзеру."""
-    if not settings.tg_bot_token:
-        return
-    try:
-        new_status = TicketStatus(new_status_value)
-    except ValueError:
-        return
-    # Только видимые юзеру статусы.
-    if new_status not in (TicketStatus.resolved, TicketStatus.closed, TicketStatus.pending_admin):
-        return
-
-    async with AsyncSessionLocal() as db:
-        ticket = await db.get(Ticket, ticket_id)
-        if ticket is None:
-            return
-        user = await db.get(User, ticket.user_id)
-        if user is None:
-            return
-
-        # pending_admin = reopen — слать только если это после resolved/closed
-        # (а не просто перевод open → pending_admin при ответе юзера, который
-        # пользователь и так инициировал).
-        if new_status == TicketStatus.pending_admin and ticket.last_admin_msg_at is None:
-            return
-
-        key = (user.lang, new_status)
-        tpl = _TPL_STATUS.get(key) or _TPL_STATUS.get((Lang.en, new_status))
-        if tpl is None:
-            return
-        text = tpl.format(num=ticket.number)
-        await _deliver(db, user, text, start_param=f"support_{ticket.number}")
+        tpl = _TPL_USER_REPLY.get(user.lang, _TPL_USER_REPLY[Lang.en])
+        text = tpl.format(preview=_preview(msg.body))
+        await _deliver(db, user, text, thread.block)

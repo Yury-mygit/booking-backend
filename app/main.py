@@ -10,7 +10,6 @@ from app.api.router import api_router
 from app.core.autocancel import autocancel_loop
 from app.core.config import settings
 from app.core.exceptions import APIError
-from app.services.support.auto_close import loop as support_auto_close_loop
 
 logging.basicConfig(level=logging.INFO)
 
@@ -19,7 +18,6 @@ logging.basicConfig(level=logging.INFO)
 async def lifespan(app: FastAPI):
     background = [
         asyncio.create_task(autocancel_loop()),
-        asyncio.create_task(support_auto_close_loop()),
     ]
     try:
         yield

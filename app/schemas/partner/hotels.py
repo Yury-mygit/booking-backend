@@ -1,8 +1,8 @@
-from datetime import datetime
+from datetime import datetime, time
 
 from pydantic import BaseModel, Field, field_serializer
 
-from app.models.models import Hotel, HotelStatus, MealsKind
+from app.models.models import Hotel, HotelAmenity, HotelStatus, MealsKind
 from app.services.photo_format import to_response_urls
 
 
@@ -19,6 +19,9 @@ class HotelCreate(BaseModel):
     lng: float | None = None
     photos: list[str] = Field(default_factory=list)
     meals: MealsKind = MealsKind.none
+    amenities: list[HotelAmenity] = Field(default_factory=list)
+    checkin_time: time | None = None
+    checkout_time: time | None = None
 
 
 class HotelUpdate(BaseModel):
@@ -35,6 +38,9 @@ class HotelUpdate(BaseModel):
     photos: list[str] | None = None
     status: HotelStatus | None = None
     meals: MealsKind | None = None
+    amenities: list[HotelAmenity] | None = None
+    checkin_time: time | None = None
+    checkout_time: time | None = None
 
 
 class ChecklistAction(BaseModel):
@@ -81,6 +87,9 @@ class HotelPartnerView(BaseModel):
     photos: list[str]
     status: HotelStatus
     meals: MealsKind
+    amenities: list[HotelAmenity] = Field(default_factory=list)
+    checkin_time: time | None = None
+    checkout_time: time | None = None
     published_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -107,6 +116,9 @@ class HotelPartnerView(BaseModel):
             photos=h.photos or [],
             status=h.status,
             meals=h.meals,
+            amenities=[HotelAmenity(a) for a in (h.amenities or [])],
+            checkin_time=h.checkin_time,
+            checkout_time=h.checkout_time,
             published_at=h.published_at,
             created_at=h.created_at,
             updated_at=h.updated_at,

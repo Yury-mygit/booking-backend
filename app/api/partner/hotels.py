@@ -21,6 +21,7 @@ from app.models.models import (
     HotelStatus,
     Room,
 )
+from app.schemas.hotels import serialize_hotel_amenities
 from app.schemas.partner import (
     ChecklistAction,
     ChecklistItem,
@@ -86,6 +87,9 @@ async def create_hotel(
         lng=payload.lng,
         photos=payload.photos,
         meals=payload.meals,
+        amenities=serialize_hotel_amenities(payload.amenities),
+        checkin_time=payload.checkin_time,
+        checkout_time=payload.checkout_time,
     )
     db.add(h)
     await db.flush()  # need h.id for slug fallback
@@ -288,6 +292,8 @@ async def update_hotel(
 ):
     h = await scope.get_my_hotel(db, ctx, hotel_id, require_perm="manage_hotel")
     data = payload.model_dump(exclude_unset=True)
+    if "amenities" in data and data["amenities"] is not None:
+        data["amenities"] = serialize_hotel_amenities(payload.amenities)
     name_en_changed = "name_en" in data and data["name_en"] != h.name_en
     new_status = data.get("status")
     becomes_published = (

@@ -1,6 +1,6 @@
 import enum
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from sqlalchemy import (
     BigInteger,
@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    Time,
     func,
     text,
 )
@@ -45,6 +46,51 @@ class MealsKind(str, enum.Enum):
     none = "none"
     breakfast = "breakfast"
     full_board = "full_board"
+
+
+class HotelAmenity(str, enum.Enum):
+    # general
+    atm = "atm"
+    reception_24h = "reception_24h"
+    elevator = "elevator"
+    press = "press"
+    express_checkin = "express_checkin"
+    # dining
+    bar = "bar"
+    free_tea_coffee = "free_tea_coffee"
+    breakfast = "breakfast"
+    restaurant = "restaurant"
+
+
+class RoomAmenity(str, enum.Enum):
+    # in-room
+    air_conditioning = "air_conditioning"
+    non_smoking = "non_smoking"
+    room_service = "room_service"
+    tv = "tv"
+    bathrobe = "bathrobe"
+    safe = "safe"
+    toiletries = "toiletries"
+    # services (paid flag allowed)
+    ironing_supplies = "ironing_supplies"
+    ironing_service = "ironing_service"
+    shoe_cleaning = "shoe_cleaning"
+    luggage_storage = "luggage_storage"
+    phone = "phone"
+    iron = "iron"
+
+
+# Subset of RoomAmenity where `paid: bool` payload is meaningful. Used by
+# Pydantic schemas to validate that hotel-included amenities never carry a
+# `paid` flag.
+ROOM_AMENITIES_PAID_ALLOWED = frozenset({
+    RoomAmenity.ironing_supplies,
+    RoomAmenity.ironing_service,
+    RoomAmenity.shoe_cleaning,
+    RoomAmenity.luggage_storage,
+    RoomAmenity.phone,
+    RoomAmenity.iron,
+})
 
 
 class AvailabilityStatus(str, enum.Enum):
@@ -180,6 +226,11 @@ class Hotel(Base):
         nullable=False,
         server_default=MealsKind.none.value,
     )
+    amenities: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    checkin_time: Mapped[time | None] = mapped_column(Time(timezone=False))
+    checkout_time: Mapped[time | None] = mapped_column(Time(timezone=False))
     status: Mapped[HotelStatus] = mapped_column(
         ENUM(HotelStatus, name="hotel_status"),
         nullable=False,
@@ -216,6 +267,9 @@ class Room(Base):
     single_beds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     double_beds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     photos: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    amenities: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
     created_at: Mapped[datetime] = mapped_column(

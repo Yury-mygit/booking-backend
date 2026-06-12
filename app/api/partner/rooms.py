@@ -24,6 +24,7 @@ from app.models.models import (
     Hotel,
     Room,
 )
+from app.schemas.hotels import serialize_room_amenities
 from app.schemas.partner import (
     AvailabilityBatchUpdate,
     AvailabilityRowOut,
@@ -65,7 +66,9 @@ async def create_room(
     db: AsyncSession = Depends(get_db),
 ):
     h = await scope.get_my_hotel(db, ctx, hotel_id, require_perm="manage_rooms")
-    r = Room(hotel_id=hotel_id, **payload.model_dump())
+    data = payload.model_dump()
+    data["amenities"] = serialize_room_amenities(payload.amenities)
+    r = Room(hotel_id=hotel_id, **data)
     db.add(r)
     await db.commit()
     await db.refresh(r)
@@ -117,6 +120,8 @@ async def update_room(
 ):
     r = await scope.get_my_room(db, ctx, room_id, hotel_id=hotel_id, require_perm="manage_rooms")
     data = payload.model_dump(exclude_unset=True)
+    if "amenities" in data and data["amenities"] is not None:
+        data["amenities"] = serialize_room_amenities(payload.amenities)
     if "capacity" in data and data["capacity"] != r.capacity:
         if await _room_has_active_bookings(db, r.id):
             raise APIError(

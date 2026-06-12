@@ -193,6 +193,7 @@ async def hotel_details(
                 photos=r.photos or [],
                 available_for_dates=available,
                 total_kgs_for_dates=total,
+                amenities=r.amenities or [],
             )
         )
 
@@ -231,6 +232,9 @@ async def hotel_details(
         lng=float(hotel.lng) if hotel.lng is not None else None,
         photos=hotel.photos or [],
         meals=hotel.meals,
+        amenities=hotel.amenities or [],
+        checkin_time=hotel.checkin_time,
+        checkout_time=hotel.checkout_time,
         rooms=cards,
         services=services,
     )

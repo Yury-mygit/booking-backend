@@ -32,6 +32,7 @@ from app.schemas.partner.rooms import (
     RoomCreate,
     RoomFlatView,
     RoomPartnerView,
+    RoomStatusUpdate,
     RoomUpdate,
 )
 from app.schemas.partner.services import (
@@ -71,6 +72,7 @@ __all__ = [
     "RoomCreate",
     "RoomFlatView",
     "RoomPartnerView",
+    "RoomStatusUpdate",
     "RoomUpdate",
     "ServiceCreate",
     "ServicePartnerView",

@@ -42,6 +42,12 @@ class HotelStatus(str, enum.Enum):
     blocked = "blocked"
 
 
+class RoomStatus(str, enum.Enum):
+    draft = "draft"
+    published = "published"
+    blocked = "blocked"
+
+
 class MealsKind(str, enum.Enum):
     none = "none"
     breakfast = "breakfast"
@@ -271,6 +277,11 @@ class Room(Base):
     )
     amenities: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    status: Mapped[RoomStatus] = mapped_column(
+        ENUM(RoomStatus, name="room_status"),
+        nullable=False,
+        server_default=RoomStatus.published.value,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -23,6 +23,7 @@ from app.models.models import (
     BookingStatus,
     Hotel,
     Room,
+    RoomStatus,
 )
 from app.schemas.hotels import serialize_room_amenities
 from app.schemas.partner import (
@@ -31,6 +32,7 @@ from app.schemas.partner import (
     RoomCreate,
     RoomFlatView,
     RoomPartnerView,
+    RoomStatusUpdate,
     RoomUpdate,
 )
 
@@ -68,7 +70,7 @@ async def create_room(
     h = await scope.get_my_hotel(db, ctx, hotel_id, require_perm="manage_rooms")
     data = payload.model_dump()
     data["amenities"] = serialize_room_amenities(payload.amenities)
-    r = Room(hotel_id=hotel_id, **data)
+    r = Room(hotel_id=hotel_id, status=RoomStatus.draft, **data)
     db.add(r)
     await db.commit()
     await db.refresh(r)
@@ -171,6 +173,42 @@ async def delete_room(
         payload=snapshot,
     )
     return None
+
+
+# ─── Room status (publish/unpublish) ───────────────────────────────────────
+
+@router.put("/rooms/{room_id}/status", response_model=RoomPartnerView)
+async def set_room_status(
+    room_id: int,
+    payload: RoomStatusUpdate,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    """Идемпотентная смена статуса комнаты (draft/published/blocked).
+
+    Sub-resource — публикация отделена от update полей комнаты
+    (PUT /p/hotels/{hotel_id}/rooms/{room_id}). Существующие брони
+    при unpublish не отменяются (обязательство перед клиентом).
+    """
+    r = await scope.get_my_room(db, ctx, room_id, require_perm="manage_rooms")
+    hotel_owner_id = (
+        await db.execute(select(Hotel.owner_user_id).where(Hotel.id == r.hotel_id))
+    ).scalar_one()
+    if r.status == payload.status:
+        return RoomPartnerView.from_model(r)
+    prev = r.status
+    r.status = payload.status
+    await db.commit()
+    await db.refresh(r)
+    await audit(
+        db, ctx,
+        owner_user_id=hotel_owner_id,
+        action="room.status_update",
+        subject_type="room",
+        subject_id=r.id,
+        payload={"hotel_id": r.hotel_id, "from": prev.value, "to": payload.status.value},
+    )
+    return RoomPartnerView.from_model(r)
 
 
 # ─── Availability ──────────────────────────────────────────────────────────

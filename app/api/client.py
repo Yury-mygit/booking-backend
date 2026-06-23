@@ -28,6 +28,7 @@ from app.models.models import (
     Hotel,
     HotelStatus,
     Room,
+    RoomStatus,
     UserRole,
 )
 from app.schemas.bookings import BookingMediaResponse, BookingResponse, CreateBookingRequest
@@ -85,6 +86,8 @@ async def create_booking(
         await db.execute(select(Room).where(Room.id == payload.room_id).with_for_update())
     ).scalar_one_or_none()
     if room is None:
+        raise APIError(404, "not_found", "Room not found")
+    if room.status != RoomStatus.published:
         raise APIError(404, "not_found", "Room not found")
     if room.capacity < payload.guests:
         raise APIError(400, "bad_request", "Too many guests for this room")

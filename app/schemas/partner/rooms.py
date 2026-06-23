@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_serializer
 
-from app.models.models import AvailabilityStatus, Room
+from app.models.models import AvailabilityStatus, Room, RoomStatus
 from app.schemas.hotels import RoomAmenityItem
 from app.services.photo_format import to_response_url, to_response_urls
 
@@ -39,6 +39,10 @@ class RoomUpdate(BaseModel):
     amenities: list[RoomAmenityItem] | None = None
 
 
+class RoomStatusUpdate(BaseModel):
+    status: RoomStatus
+
+
 class RoomPartnerView(BaseModel):
     id: int
     hotel_id: int
@@ -55,6 +59,7 @@ class RoomPartnerView(BaseModel):
     double_beds: int
     photos: list[str]
     amenities: list[RoomAmenityItem] = Field(default_factory=list)
+    status: RoomStatus
     created_at: datetime
 
     @field_serializer("photos")
@@ -79,6 +84,7 @@ class RoomPartnerView(BaseModel):
             double_beds=r.double_beds,
             photos=r.photos or [],
             amenities=[RoomAmenityItem.model_validate(a) for a in (r.amenities or [])],
+            status=r.status,
             created_at=r.created_at,
         )
 

@@ -25,6 +25,7 @@ from app.models.models import (
     HotelService,
     HotelStatus,
     Room,
+    RoomStatus,
 )
 from app.schemas.hotels import HotelDetails, HotelListItem, RoomCard, ServicePublicView
 from app.utils import date_range_nights
@@ -64,7 +65,11 @@ async def list_hotels(
     _validate_date_range(check_in, check_out)
 
     # Subquery: rooms that fit (capacity OK) and (if dates given) are free.
-    room_filter = [Room.hotel_id == Hotel.id, Room.capacity >= guests]
+    room_filter = [
+        Room.hotel_id == Hotel.id,
+        Room.capacity >= guests,
+        Room.status == RoomStatus.published,
+    ]
     if check_in and check_out:
         room_filter.append(not_(_room_unavailable_clause(check_in, check_out)))
 
@@ -126,7 +131,16 @@ async def hotel_details(
     hotel_id = hotel.id
 
     rooms = (
-        (await db.execute(select(Room).where(Room.hotel_id == hotel_id))).scalars().all()
+        (
+            await db.execute(
+                select(Room).where(
+                    Room.hotel_id == hotel_id,
+                    Room.status == RoomStatus.published,
+                )
+            )
+        )
+        .scalars()
+        .all()
     )
 
     # capacity/beds filter (same shape as frontend «1+1» / «2 гостя» / family).

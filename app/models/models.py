@@ -330,7 +330,10 @@ class Booking(Base):
     )
     check_in: Mapped[date] = mapped_column(Date, nullable=False)
     check_out: Mapped[date] = mapped_column(Date, nullable=False)
-    guests: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    adults: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    children: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    infants: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    child_ages: Mapped[list[int] | None] = mapped_column(JSONB, nullable=True)
     total_kgs: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[BookingStatus] = mapped_column(
         ENUM(BookingStatus, name="booking_status"),

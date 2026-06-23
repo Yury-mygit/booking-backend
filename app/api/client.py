@@ -64,7 +64,10 @@ async def _build_response(db: AsyncSession, booking: Booking) -> BookingResponse
         hotel_photo=photos[0] if photos else None,
         check_in=booking.check_in,
         check_out=booking.check_out,
-        guests=booking.guests,
+        adults=booking.adults,
+        children=booking.children,
+        infants=booking.infants,
+        child_ages=booking.child_ages,
         total_kgs=booking.total_kgs,
         status=booking.status,
         postpay=booking.postpay,
@@ -89,7 +92,7 @@ async def create_booking(
         raise APIError(404, "not_found", "Room not found")
     if room.status != RoomStatus.published:
         raise APIError(404, "not_found", "Room not found")
-    if room.capacity < payload.guests:
+    if room.capacity < payload.adults + payload.children:
         raise APIError(400, "bad_request", "Too many guests for this room")
 
     # Hotel must be published.
@@ -155,7 +158,10 @@ async def create_booking(
         room_id=payload.room_id,
         check_in=payload.check_in,
         check_out=payload.check_out,
-        guests=payload.guests,
+        adults=payload.adults,
+        children=payload.children,
+        infants=payload.infants,
+        child_ages=payload.child_ages,
         total_kgs=total,
         status=BookingStatus.pending,
     )

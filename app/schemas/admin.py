@@ -74,7 +74,10 @@ class AdminBookingView(BaseModel):
     hotel_name_ru: str
     check_in: date
     check_out: date
-    guests: int
+    adults: int
+    children: int
+    infants: int
+    child_ages: list[int] | None
     total_kgs: int
     status: BookingStatus
     created_at: datetime

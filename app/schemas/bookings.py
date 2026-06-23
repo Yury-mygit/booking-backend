@@ -1,16 +1,16 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, field_serializer
 
 from app.models.models import BookingStatus
+from app.schemas._guests import GuestsFields
 from app.services.photo_format import to_response_url, to_response_urls
 
 
-class CreateBookingRequest(BaseModel):
+class CreateBookingRequest(GuestsFields):
     room_id: int
     check_in: date
     check_out: date
-    guests: int = Field(default=1, ge=1, le=20)
 
 
 class BookingMediaResponse(BaseModel):
@@ -31,7 +31,10 @@ class BookingResponse(BaseModel):
     hotel_photo: str | None
     check_in: date
     check_out: date
-    guests: int
+    adults: int
+    children: int
+    infants: int
+    child_ages: list[int] | None
     total_kgs: int
     status: BookingStatus
     postpay: bool

@@ -277,7 +277,7 @@ async def create_walkin_booking(
     room, hotel = row
     if not ctx.accessible_owners[hotel.owner_user_id].has("manage_bookings"):
         raise APIError(403, "permission_denied", "Missing permission: manage_bookings")
-    if room.capacity < payload.guests:
+    if room.capacity < payload.adults + payload.children:
         raise APIError(400, "bad_request", "Too many guests for this room")
 
     # Lock availability rows in range; verify nothing is blocked/booked.
@@ -333,7 +333,10 @@ async def create_walkin_booking(
         room_id=room.id,
         check_in=payload.check_in,
         check_out=payload.check_out,
-        guests=payload.guests,
+        adults=payload.adults,
+        children=payload.children,
+        infants=payload.infants,
+        child_ages=payload.child_ages,
         total_kgs=total,
         status=BookingStatus.pending,
         postpay=True,    # walk-in = физ. оплата у стойки; не подпадает под 24h auto-cancel

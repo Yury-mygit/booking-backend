@@ -10,6 +10,7 @@ from app.models.models import (
     Hotel,
     Room,
 )
+from app.schemas._guests import GuestsFields
 
 
 class PartnerBookingView(BaseModel):
@@ -23,7 +24,10 @@ class PartnerBookingView(BaseModel):
     client_first_name: str | None
     check_in: date
     check_out: date
-    guests: int
+    adults: int
+    children: int
+    infants: int
+    child_ages: list[int] | None
     total_kgs: int
     status: BookingStatus
     postpay: bool
@@ -45,7 +49,10 @@ class PartnerBookingView(BaseModel):
             client_first_name=c.first_name,
             check_in=b.check_in,
             check_out=b.check_out,
-            guests=b.guests,
+            adults=b.adults,
+            children=b.children,
+            infants=b.infants,
+            child_ages=b.child_ages,
             total_kgs=b.total_kgs,
             status=b.status,
             postpay=b.postpay,
@@ -58,11 +65,10 @@ class PartnerBookingPostpaySet(BaseModel):
     postpay: bool
 
 
-class WalkinBookingCreate(BaseModel):
+class WalkinBookingCreate(GuestsFields):
     room_id: int
     check_in: date
     check_out: date
-    guests: int = Field(default=1, ge=1, le=20)
     first_name: str = Field(min_length=1, max_length=128)
     last_name: str | None = Field(default=None, max_length=128)
     phone: str | None = Field(default=None, max_length=32)

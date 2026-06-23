@@ -34,8 +34,11 @@ _HOTEL_PROMPT = {
     "en": "Hotel booking\n{hotel}",
 }
 
-# hotel_<slug> либо hotel_<slug>_<ci>_<co>_<guests>
-_HOTEL_SP_RE = re.compile(r"^hotel_(.+?)(?:_\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}_\d+)?$")
+# hotel_<slug> либо hotel_<slug>_<ci>_<co>_<adults>[_<children>[_<infants>]]
+# (исторически было `_<guests>` — одно число; после #125 — 1-3 числа)
+_HOTEL_SP_RE = re.compile(
+    r"^hotel_(.+?)(?:_\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}(?:_\d+)+)?$"
+)
 
 
 def _pick_lang(message: dict) -> str:

@@ -59,15 +59,18 @@ async def list_hotels(
     city: str | None = Query(default=None),
     check_in: date | None = Query(default=None),
     check_out: date | None = Query(default=None),
-    guests: int = Query(default=1, ge=1, le=20),
+    adults: int = Query(default=1, ge=1, le=8),
+    children: int = Query(default=0, ge=0, le=6),
+    infants: int = Query(default=0, ge=0, le=4),
     db: AsyncSession = Depends(get_db),
 ) -> list[HotelListItem]:
     _validate_date_range(check_in, check_out)
 
     # Subquery: rooms that fit (capacity OK) and (if dates given) are free.
+    # infants are not counted toward capacity (hotel-industry convention).
     room_filter = [
         Room.hotel_id == Hotel.id,
-        Room.capacity >= guests,
+        Room.capacity >= adults + children,
         Room.status == RoomStatus.published,
     ]
     if check_in and check_out:
@@ -114,7 +117,9 @@ async def hotel_details(
     slug_or_id: str,
     check_in: date | None = Query(default=None),
     check_out: date | None = Query(default=None),
-    guests: int = Query(default=1, ge=1, le=20),
+    adults: int = Query(default=1, ge=1, le=8),
+    children: int = Query(default=0, ge=0, le=6),
+    infants: int = Query(default=0, ge=0, le=4),
     beds: Literal["single", "double"] | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> HotelDetails:
@@ -143,13 +148,13 @@ async def hotel_details(
         .all()
     )
 
-    # capacity/beds filter (same shape as frontend «1+1» / «2 гостя» / family).
+    # capacity/beds filter. infants not counted toward capacity.
     def matches_beds(r: Room) -> bool:
         if beds == "single":
             return r.single_beds >= 2
         if beds == "double":
             return r.double_beds >= 1
-        return r.capacity >= guests
+        return r.capacity >= adults + children
 
     rooms = [r for r in rooms if matches_beds(r)]
 

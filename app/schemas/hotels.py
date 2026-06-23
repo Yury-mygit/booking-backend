@@ -127,4 +127,6 @@ class HotelSearchQuery(BaseModel):
     city: str | None = None
     check_in: date | None = None
     check_out: date | None = None
-    guests: int = Field(default=1, ge=1, le=20)
+    adults: int = Field(default=1, ge=1, le=8)
+    children: int = Field(default=0, ge=0, le=6)
+    infants: int = Field(default=0, ge=0, le=4)

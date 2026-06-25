@@ -19,6 +19,7 @@ from app.api.partner import (
     chat,
     clients,
     hotels,
+    roles,
     rooms,
     services,
     staff,
@@ -32,4 +33,5 @@ router.include_router(bookings.router)
 router.include_router(clients.router)
 router.include_router(chat.router)
 router.include_router(staff.router)
+router.include_router(roles.router)
 router.include_router(audit.router)

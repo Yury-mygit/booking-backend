@@ -1,13 +1,15 @@
-"""Partner staff: владелец → сотрудник по telegram_id, M2M через PartnerStaff.
+"""Partner staff: владелец → сотрудник по telegram_id.
 
-4 perm-флага: manage_hotel/rooms/bookings/staff. Также внешние invite-ссылки
-(`/staff/invites`) с deep-link через `@rforge_stay_bot?startapp=invite_*`.
+Effective perm = explicit tri-state override на staff (если не NULL) |
+OR-union прав по всем привязанным ролям | False. Roles = M2M через
+`partner_staff_role`. Invite минимальный — только note + expires,
+никаких prefilled ролей и perms (раздаются после accept'а).
 """
 import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -17,8 +19,10 @@ from app.core.audit import audit
 from app.services import scope
 from app.models.models import (
     AuditLog,
+    PartnerRole,
     PartnerStaff,
     PartnerStaffInvite,
+    PartnerStaffRole,
     User,
     UserRole,
 )
@@ -27,12 +31,57 @@ from app.schemas.partner import (
     StaffInviteAccept,
     StaffInviteCreate,
     StaffInviteView,
-    StaffPerms,
     StaffUpdate,
     StaffView,
 )
+from app.schemas.partner.staff import TriStatePerms
 
 router = APIRouter()  # prefix задан в partner/__init__.py
+
+
+async def _load_roles(
+    db: AsyncSession, owner_id: int, role_ids: list[int]
+) -> list[PartnerRole]:
+    """Загрузить роли и убедиться, что все принадлежат owner'у.
+
+    Дубли в role_ids свёртываются. 404 если хоть один id не найден или
+    принадлежит другому owner'у."""
+    if not role_ids:
+        return []
+    uniq = list({rid for rid in role_ids})
+    rows = (
+        await db.execute(
+            select(PartnerRole).where(PartnerRole.id.in_(uniq))
+        )
+    ).scalars().all()
+    if len(rows) != len(uniq) or any(r.owner_user_id != owner_id for r in rows):
+        raise APIError(404, "not_found", "Role not found")
+    return rows
+
+
+async def _load_staff_roles(
+    db: AsyncSession, staff_id: int
+) -> list[PartnerRole]:
+    """Подгрузить все роли, привязанные к staff'у через junction."""
+    return (
+        await db.execute(
+            select(PartnerRole)
+            .join(PartnerStaffRole, PartnerStaffRole.role_id == PartnerRole.id)
+            .where(PartnerStaffRole.staff_id == staff_id)
+            .order_by(PartnerRole.name)
+        )
+    ).scalars().all()
+
+
+async def _replace_staff_roles(
+    db: AsyncSession, staff_id: int, role_ids: list[int]
+) -> None:
+    """Полностью заменить junction-rows у staff'а. role_ids уже валидирован."""
+    await db.execute(
+        delete(PartnerStaffRole).where(PartnerStaffRole.staff_id == staff_id)
+    )
+    for rid in {rid for rid in role_ids}:
+        db.add(PartnerStaffRole(staff_id=staff_id, role_id=rid))
 
 
 # ─── Staff ────────────────────────────────────────────────────────────────
@@ -56,7 +105,7 @@ async def list_staff(
     if not access.has("manage_staff"):
         raise APIError(403, "permission_denied", "Missing permission: manage_staff")
 
-    rows = (
+    staff_rows = (
         await db.execute(
             select(PartnerStaff, User)
             .join(User, User.id == PartnerStaff.staff_user_id)
@@ -64,7 +113,25 @@ async def list_staff(
             .order_by(PartnerStaff.created_at.desc())
         )
     ).all()
-    return [StaffView.from_model(ps, u) for (ps, u) in rows]
+    if not staff_rows:
+        return []
+    # Один SQL: junction × role для всех staff'ов сразу. Группируем в Python.
+    staff_ids = [ps.id for (ps, _) in staff_rows]
+    role_rows = (
+        await db.execute(
+            select(PartnerStaffRole.staff_id, PartnerRole)
+            .join(PartnerRole, PartnerRole.id == PartnerStaffRole.role_id)
+            .where(PartnerStaffRole.staff_id.in_(staff_ids))
+            .order_by(PartnerRole.name)
+        )
+    ).all()
+    roles_by_staff: dict[int, list[PartnerRole]] = {}
+    for sid, role in role_rows:
+        roles_by_staff.setdefault(sid, []).append(role)
+    return [
+        StaffView.from_model(ps, u, roles_by_staff.get(ps.id, []))
+        for (ps, u) in staff_rows
+    ]
 
 
 @router.post("/staff", response_model=StaffView, status_code=201)
@@ -118,6 +185,8 @@ async def add_staff(
     if existing is not None:
         raise APIError(409, "already_member", "User is already a staff member")
 
+    roles = await _load_roles(db, owner_id, payload.role_ids)
+
     ps = PartnerStaff(
         owner_user_id=owner_id,
         staff_user_id=staff_user.id,
@@ -125,10 +194,13 @@ async def add_staff(
         perm_manage_rooms=payload.perms.manage_rooms,
         perm_manage_bookings=payload.perms.manage_bookings,
         perm_manage_staff=payload.perms.manage_staff,
+        perm_chat_with_clients=payload.perms.chat_with_clients,
         note=payload.note,
         added_by_user_id=ctx.user.id,
     )
     db.add(ps)
+    await db.flush()  # нужен ps.id для junction
+    await _replace_staff_roles(db, ps.id, [r.id for r in roles])
     await db.commit()
     await db.refresh(ps)
     await audit(
@@ -140,11 +212,12 @@ async def add_staff(
         payload={
             "staff_user_id": staff_user.id,
             "telegram_id": staff_user.telegram_id,
+            "role_ids": [r.id for r in roles],
             "perms": payload.perms.model_dump(),
             "note": payload.note,
         },
     )
-    return StaffView.from_model(ps, staff_user)
+    return StaffView.from_model(ps, staff_user, roles)
 
 
 @router.put("/staff/{staff_id}", response_model=StaffView)
@@ -171,12 +244,22 @@ async def update_staff(
         raise APIError(403, "permission_denied", "Missing permission: manage_staff")
 
     diff: dict = {}
+    if payload.role_ids is not None:
+        # Полная замена набора ролей (валидируем принадлежность owner'у).
+        new_roles = await _load_roles(db, ps.owner_user_id, payload.role_ids)
+        current = await _load_staff_roles(db, ps.id)
+        before_ids = sorted(r.id for r in current)
+        after_ids = sorted({r.id for r in new_roles})
+        if before_ids != after_ids:
+            diff["role_ids"] = {"before": before_ids, "after": after_ids}
+            await _replace_staff_roles(db, ps.id, after_ids)
     if payload.perms is not None:
-        before = StaffPerms.from_model(ps).model_dump()
+        before = TriStatePerms.from_model(ps).model_dump()
         ps.perm_manage_hotel = payload.perms.manage_hotel
         ps.perm_manage_rooms = payload.perms.manage_rooms
         ps.perm_manage_bookings = payload.perms.manage_bookings
         ps.perm_manage_staff = payload.perms.manage_staff
+        ps.perm_chat_with_clients = payload.perms.chat_with_clients
         after = payload.perms.model_dump()
         if before != after:
             diff["perms"] = {"before": before, "after": after}
@@ -185,6 +268,7 @@ async def update_staff(
         ps.note = payload.note
     await db.commit()
     await db.refresh(ps)
+    roles = await _load_staff_roles(db, ps.id)
     if diff:
         await audit(
             db, ctx,
@@ -194,7 +278,7 @@ async def update_staff(
             subject_id=ps.id,
             payload=diff,
         )
-    return StaffView.from_model(ps, staff_user)
+    return StaffView.from_model(ps, staff_user, roles)
 
 
 @router.delete("/staff/{staff_id}", status_code=204)
@@ -215,11 +299,14 @@ async def remove_staff(
         raise APIError(403, "permission_denied", "Missing permission: manage_staff")
 
     owner_id = ps.owner_user_id
+    role_ids_snapshot = [r.id for r in await _load_staff_roles(db, ps.id)]
     snapshot = {
         "staff_user_id": ps.staff_user_id,
-        "perms": StaffPerms.from_model(ps).model_dump(),
+        "role_ids": role_ids_snapshot,
+        "perms": TriStatePerms.from_model(ps).model_dump(),
         "note": ps.note,
     }
+    # junction уйдёт CASCADE'ом по FK
     await db.delete(ps)
     await db.commit()
     await audit(
@@ -259,10 +346,6 @@ async def create_staff_invite(
         token=token,
         owner_user_id=owner_id,
         created_by_user_id=ctx.user.id,
-        perm_manage_hotel=payload.perms.manage_hotel,
-        perm_manage_rooms=payload.perms.manage_rooms,
-        perm_manage_bookings=payload.perms.manage_bookings,
-        perm_manage_staff=payload.perms.manage_staff,
         note=payload.note,
         expires_at=expires_at,
     )
@@ -276,7 +359,6 @@ async def create_staff_invite(
         subject_type="staff_invite",
         subject_id=inv.id,
         payload={
-            "perms": payload.perms.model_dump(),
             "expires_at": inv.expires_at.isoformat(),
             "note": payload.note,
         },
@@ -308,7 +390,7 @@ async def list_staff_invites(
             .order_by(PartnerStaffInvite.created_at.desc())
         )
     ).scalars().all()
-    return [StaffInviteView.from_model(r) for r in rows]
+    return [StaffInviteView.from_model(inv) for inv in rows]
 
 
 @router.delete("/staff/invites/{invite_id}", status_code=204)
@@ -382,13 +464,11 @@ async def accept_staff_invite(
     if ctx.user.role == UserRole.client:
         ctx.user.role = UserRole.partner
 
+    # Invite минимальный — staff создаётся без ролей и perms.
+    # Админ потом раздаёт через PUT /p/staff/{id}.
     ps = PartnerStaff(
         owner_user_id=inv.owner_user_id,
         staff_user_id=ctx.user.id,
-        perm_manage_hotel=inv.perm_manage_hotel,
-        perm_manage_rooms=inv.perm_manage_rooms,
-        perm_manage_bookings=inv.perm_manage_bookings,
-        perm_manage_staff=inv.perm_manage_staff,
         note=inv.note,
         added_by_user_id=inv.created_by_user_id,
     )
@@ -397,12 +477,7 @@ async def accept_staff_invite(
     inv.used_by_user_id = ctx.user.id
     await db.commit()
     await db.refresh(ps)
-    # audit is recorded under the owner's namespace
-    fake_ctx = AuthContext(user=ctx.user, session=ctx.session)
-    fake_ctx.accessible_owners = {
-        inv.owner_user_id: type("X", (), {"is_self": False})()  # unused; we pass owner_user_id explicitly
-    }
-    # Use a direct audit insert to set actor_role = "staff" (self-onboarding).
+    # Audit под owner'ом, актор = принявший себя staff (self-onboarding).
     db.add(AuditLog(
         owner_user_id=inv.owner_user_id,
         actor_user_id=ctx.user.id,
@@ -410,17 +485,9 @@ async def accept_staff_invite(
         action="staff.invite_accept",
         subject_type="staff",
         subject_id=ps.id,
-        payload={
-            "invite_id": inv.id,
-            "perms": {
-                "manage_hotel": inv.perm_manage_hotel,
-                "manage_rooms": inv.perm_manage_rooms,
-                "manage_bookings": inv.perm_manage_bookings,
-                "manage_staff": inv.perm_manage_staff,
-            },
-        },
+        payload={"invite_id": inv.id},
     ))
     await db.commit()
-    return StaffView.from_model(ps, ctx.user)
+    return StaffView.from_model(ps, ctx.user, [])
 
 

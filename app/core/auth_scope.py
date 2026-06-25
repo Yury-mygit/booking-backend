@@ -10,7 +10,14 @@ A user with empty accessible_owners is rejected by `require_partner_or_staff`
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import PartnerProfile, PartnerStaff, User
+from app.models.models import (
+    PartnerProfile,
+    PartnerRole,
+    PartnerStaff,
+    PartnerStaffRole,
+    User,
+    compute_effective_perm,
+)
 
 
 class OwnerPerms:
@@ -72,26 +79,37 @@ async def load_accessible_owners(
             chat_with_clients=True,
         )
 
-    # Staff memberships.
+    # Staff memberships (M2M). Effective perms = explicit override on
+    # PartnerStaff (NULL → OR(union ролей) → False). Outer-join по junction,
+    # затем агрегируем роли на ps в Python (set может расширить ряды x N).
     rows = (
         await db.execute(
-            select(PartnerStaff, User)
+            select(PartnerStaff, User, PartnerRole)
             .join(User, User.id == PartnerStaff.owner_user_id)
+            .outerjoin(PartnerStaffRole, PartnerStaffRole.staff_id == PartnerStaff.id)
+            .outerjoin(PartnerRole, PartnerRole.id == PartnerStaffRole.role_id)
             .where(PartnerStaff.staff_user_id == user.id)
         )
     ).all()
-    for ps, owner in rows:
+    agg: dict[int, tuple[PartnerStaff, User, list[PartnerRole]]] = {}
+    for ps, owner, role in rows:
+        if ps.id not in agg:
+            agg[ps.id] = (ps, owner, [])
+        if role is not None:
+            agg[ps.id][2].append(role)
+
+    for ps, owner, roles in agg.values():
         if ps.owner_user_id == user.id:
             continue  # paranoia: never overshadow self entry with a stale row
         result[ps.owner_user_id] = OwnerPerms(
             owner_user_id=ps.owner_user_id,
             owner_display_name=owner.first_name,
             is_self=False,
-            manage_hotel=ps.perm_manage_hotel,
-            manage_rooms=ps.perm_manage_rooms,
-            manage_bookings=ps.perm_manage_bookings,
-            manage_staff=ps.perm_manage_staff,
-            chat_with_clients=ps.perm_chat_with_clients,
+            manage_hotel=compute_effective_perm(ps, roles, "manage_hotel"),
+            manage_rooms=compute_effective_perm(ps, roles, "manage_rooms"),
+            manage_bookings=compute_effective_perm(ps, roles, "manage_bookings"),
+            manage_staff=compute_effective_perm(ps, roles, "manage_staff"),
+            chat_with_clients=compute_effective_perm(ps, roles, "chat_with_clients"),
         )
 
     return result

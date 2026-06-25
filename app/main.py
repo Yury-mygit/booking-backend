@@ -38,7 +38,7 @@ app.include_router(api_router, prefix="/api/v1")
 
 @app.exception_handler(APIError)
 async def api_error_handler(request: Request, exc: APIError) -> JSONResponse:
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"error": exc.error, "message": exc.message},
-    )
+    body: dict = {"error": exc.error, "message": exc.message}
+    if exc.detail is not None:
+        body["detail"] = exc.detail
+    return JSONResponse(status_code=exc.status_code, content=body)

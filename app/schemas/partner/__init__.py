@@ -42,6 +42,9 @@ from app.schemas.partner.services import (
 )
 from app.schemas.partner.staff import (
     OwnerAccess,
+    RoleCreate,
+    RoleUpdate,
+    RoleView,
     StaffCreate,
     StaffInviteAccept,
     StaffInviteCreate,
@@ -49,6 +52,7 @@ from app.schemas.partner.staff import (
     StaffPerms,
     StaffUpdate,
     StaffView,
+    TriStatePerms,
 )
 
 __all__ = [
@@ -69,6 +73,9 @@ __all__ = [
     "OwnerAccess",
     "PartnerBookingPostpaySet",
     "PartnerBookingView",
+    "RoleCreate",
+    "RoleUpdate",
+    "RoleView",
     "RoomCreate",
     "RoomFlatView",
     "RoomPartnerView",
@@ -84,5 +91,6 @@ __all__ = [
     "StaffPerms",
     "StaffUpdate",
     "StaffView",
+    "TriStatePerms",
     "WalkinBookingCreate",
 ]

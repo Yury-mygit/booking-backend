@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     Time,
+    UniqueConstraint,
     func,
     text,
 )
@@ -390,6 +391,49 @@ class Payment(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class PartnerRole(Base):
+    __tablename__ = "partner_role"
+    __table_args__ = (UniqueConstraint("owner_user_id", "name", name="uq_partner_role_owner_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    perm_manage_hotel: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    perm_manage_rooms: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    perm_manage_bookings: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    perm_manage_staff: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    perm_chat_with_clients: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+PERM_NAMES = (
+    "manage_hotel",
+    "manage_rooms",
+    "manage_bookings",
+    "manage_staff",
+    "chat_with_clients",
+)
+
+
+def compute_effective_perm(
+    staff: "PartnerStaff",
+    roles: "list[PartnerRole]",
+    perm: str,
+) -> bool:
+    """Tri-state explicit override → OR-union over roles → False."""
+    own = getattr(staff, f"perm_{perm}")
+    if own is not None:
+        return own
+    return any(getattr(r, f"perm_{perm}") for r in roles)
+
+
 class PartnerStaff(Base):
     __tablename__ = "partner_staff"
 
@@ -400,27 +444,29 @@ class PartnerStaff(Base):
     staff_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    perm_manage_hotel: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("false")
-    )
-    perm_manage_rooms: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("false")
-    )
-    perm_manage_bookings: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("true")
-    )
-    perm_manage_staff: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("false")
-    )
-    perm_chat_with_clients: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("false")
-    )
+    perm_manage_hotel: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    perm_manage_rooms: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    perm_manage_bookings: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    perm_manage_staff: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    perm_chat_with_clients: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     note: Mapped[str | None] = mapped_column(String(128))
     added_by_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class PartnerStaffRole(Base):
+    """Junction: many-to-many между сотрудником и ролями."""
+    __tablename__ = "partner_staff_role"
+
+    staff_id: Mapped[int] = mapped_column(
+        ForeignKey("partner_staff.id", ondelete="CASCADE"), primary_key=True
+    )
+    role_id: Mapped[int] = mapped_column(
+        ForeignKey("partner_role.id", ondelete="CASCADE"), primary_key=True
     )
 
 
@@ -435,11 +481,6 @@ class PartnerStaffInvite(Base):
     created_by_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
-    perm_manage_hotel: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
-    perm_manage_rooms: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
-    perm_manage_bookings: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
-    perm_manage_staff: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
-    perm_chat_with_clients: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     note: Mapped[str | None] = mapped_column(String(128))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

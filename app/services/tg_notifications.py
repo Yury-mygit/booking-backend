@@ -25,12 +25,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
+from sqlalchemy import and_, or_
+
 from app.models.models import (
     ChatMessage,
     ChatSenderKind,
     ChatThread,
     Hotel,
+    PartnerRole,
     PartnerStaff,
+    PartnerStaffRole,
     User,
 )
 
@@ -154,13 +158,26 @@ async def _hotel_recipients(db: AsyncSession, hotel: Hotel) -> list[User]:
     owner = (
         await db.execute(select(User).where(User.id == hotel.owner_user_id))
     ).scalar_one_or_none()
+    # Effective chat_with_clients = explicit ps.perm=true OR (ps.perm IS NULL
+    # AND ЛЮБАЯ из ролей staff'а даёт perm=true). NULL/false override на
+    # staff отключает наследование от любых ролей. DISTINCT — junction
+    # размножает ряды по количеству ролей.
     staff_users = (
         await db.execute(
             select(User)
+            .distinct()
             .join(PartnerStaff, PartnerStaff.staff_user_id == User.id)
+            .outerjoin(PartnerStaffRole, PartnerStaffRole.staff_id == PartnerStaff.id)
+            .outerjoin(PartnerRole, PartnerRole.id == PartnerStaffRole.role_id)
             .where(
                 PartnerStaff.owner_user_id == hotel.owner_user_id,
-                PartnerStaff.perm_chat_with_clients.is_(True),
+                or_(
+                    PartnerStaff.perm_chat_with_clients.is_(True),
+                    and_(
+                        PartnerStaff.perm_chat_with_clients.is_(None),
+                        PartnerRole.perm_chat_with_clients.is_(True),
+                    ),
+                ),
             )
         )
     ).scalars().all()

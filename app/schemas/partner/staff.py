@@ -105,6 +105,9 @@ class StaffCreate(BaseModel):
     role_ids: list[int] = Field(default_factory=list)
     perms: TriStatePerms = Field(default_factory=TriStatePerms)
     note: str | None = Field(default=None, max_length=128)
+    first_name: str | None = Field(default=None, max_length=128)
+    last_name: str | None = Field(default=None, max_length=128)
+    middle_name: str | None = Field(default=None, max_length=128)
 
 
 class StaffUpdate(BaseModel):
@@ -122,6 +125,9 @@ class StaffView(BaseModel):
     staff_user_id: int
     staff_telegram_id: int
     staff_display_name: str | None
+    first_name: str | None
+    last_name: str | None
+    middle_name: str | None
     roles: list[RoleView]
     perms: TriStatePerms
     effective_perms: StaffPerms
@@ -132,13 +138,17 @@ class StaffView(BaseModel):
     def from_model(
         cls, ps: PartnerStaff, staff_user: User, roles: list[PartnerRole] | None = None
     ) -> "StaffView":
+        from app.core.display import staff_display_name
         roles = roles or []
         return cls(
             id=ps.id,
             owner_user_id=ps.owner_user_id,
             staff_user_id=ps.staff_user_id,
             staff_telegram_id=staff_user.telegram_id,
-            staff_display_name=staff_user.first_name,
+            staff_display_name=staff_display_name(ps, staff_user),
+            first_name=ps.first_name,
+            last_name=ps.last_name,
+            middle_name=ps.middle_name,
             roles=[RoleView.from_model(r) for r in roles],
             perms=TriStatePerms.from_model(ps),
             effective_perms=compute_effective(ps, roles),

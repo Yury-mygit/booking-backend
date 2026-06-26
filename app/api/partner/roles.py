@@ -165,6 +165,7 @@ async def delete_role(
         )
     ).all()
     if in_use:
+        from app.core.display import staff_display_name
         raise APIError(
             409,
             "role_in_use",
@@ -174,7 +175,7 @@ async def delete_role(
                     {
                         "id": ps.id,
                         "telegram_id": u.telegram_id,
-                        "display_name": u.first_name,
+                        "display_name": staff_display_name(ps, u),
                     }
                     for (ps, u) in in_use
                 ]

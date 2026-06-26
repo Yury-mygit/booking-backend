@@ -2,14 +2,16 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import AuthContext, require_verified_partner
+from app.core.display import staff_display_name
 from app.services import scope
 from app.models.models import (
     AuditLog,
+    PartnerStaff,
     User,
 )
 from app.schemas.partner import (
@@ -33,8 +35,15 @@ def _audit_stmt_base(
 ):
     accessible_ids = scope.scope_owner_ids(ctx, owner_id)
     stmt = (
-        select(AuditLog, User)
+        select(AuditLog, User, PartnerStaff)
         .join(User, User.id == AuditLog.actor_user_id)
+        .outerjoin(
+            PartnerStaff,
+            and_(
+                PartnerStaff.staff_user_id == AuditLog.actor_user_id,
+                PartnerStaff.owner_user_id == AuditLog.owner_user_id,
+            ),
+        )
         .where(AuditLog.owner_user_id.in_(accessible_ids))
         .order_by(AuditLog.created_at.desc())
     )
@@ -51,9 +60,14 @@ def _audit_stmt_base(
     if q:
         pat = f"%{q}%"
         stmt = stmt.where(
-            (User.first_name.ilike(pat))
-            | (AuditLog.action.ilike(pat))
-            | (AuditLog.subject_type.ilike(pat))
+            or_(
+                User.first_name.ilike(pat),
+                PartnerStaff.first_name.ilike(pat),
+                PartnerStaff.last_name.ilike(pat),
+                PartnerStaff.middle_name.ilike(pat),
+                AuditLog.action.ilike(pat),
+                AuditLog.subject_type.ilike(pat),
+            )
         )
     return stmt
 
@@ -81,7 +95,7 @@ async def list_audit(
             id=a.id,
             owner_user_id=a.owner_user_id,
             actor_user_id=a.actor_user_id,
-            actor_display_name=u.first_name,
+            actor_display_name=staff_display_name(ps, u) if ps is not None else u.first_name,
             actor_role=a.actor_role,
             action=a.action,
             subject_type=a.subject_type,
@@ -89,7 +103,7 @@ async def list_audit(
             payload=a.payload,
             created_at=a.created_at,
         )
-        for (a, u) in rows
+        for (a, u, ps) in rows
     ]
 
 
@@ -118,10 +132,11 @@ async def audit_csv(
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["created_at", "actor", "actor_role", "action", "subject_type", "subject_id", "payload"])
-    for (a, u) in rows:
+    for (a, u, ps) in rows:
+        actor = staff_display_name(ps, u) if ps is not None else (u.first_name or "")
         w.writerow([
             a.created_at.isoformat(),
-            u.first_name or "",
+            actor,
             a.actor_role,
             a.action,
             a.subject_type or "",

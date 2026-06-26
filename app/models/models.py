@@ -450,6 +450,9 @@ class PartnerStaff(Base):
     perm_manage_staff: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     perm_chat_with_clients: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     note: Mapped[str | None] = mapped_column(String(128))
+    first_name: Mapped[str | None] = mapped_column(String(128))
+    last_name: Mapped[str | None] = mapped_column(String(128))
+    middle_name: Mapped[str | None] = mapped_column(String(128))
     added_by_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )

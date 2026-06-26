@@ -196,6 +196,9 @@ async def add_staff(
         perm_manage_staff=payload.perms.manage_staff,
         perm_chat_with_clients=payload.perms.chat_with_clients,
         note=payload.note,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        middle_name=payload.middle_name,
         added_by_user_id=ctx.user.id,
     )
     db.add(ps)

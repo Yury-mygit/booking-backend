@@ -80,6 +80,7 @@ async def create_room(
         action="room.create",
         subject_type="room",
         subject_id=r.id,
+        hotel_id=hotel_id,
         payload={"hotel_id": hotel_id, "name_ru": r.name_ru, "capacity": r.capacity, "price_kgs": r.price_kgs},
     )
     return RoomPartnerView.from_model(r)
@@ -142,6 +143,7 @@ async def update_room(
         action="room.update",
         subject_type="room",
         subject_id=r.id,
+        hotel_id=hotel_id,
         payload={"hotel_id": hotel_id, "changed_fields": list(data.keys())},
     )
     return RoomPartnerView.from_model(r)
@@ -206,6 +208,7 @@ async def set_room_status(
         action="room.status_update",
         subject_type="room",
         subject_id=r.id,
+        hotel_id=hotel_id,
         payload={"hotel_id": r.hotel_id, "from": prev.value, "to": payload.status.value},
     )
     return RoomPartnerView.from_model(r)

@@ -377,9 +377,12 @@ async def list_staff_invites(
 ):
     accessible_ids = scope.scope_owner_ids(ctx, owner_id)
     # Только владельцы, где у текущего user есть manage_staff.
+    # Visibility: показываем invite-список, если у user есть manage_staff
+    # хотя бы на один отель owner'а (coarse view). Сам POST/DELETE на
+    # invite — отдельные endpoints с `.can(None, 'manage_staff')`.
     allowed = [
         oid for oid in accessible_ids
-        if ctx.accessible_owners[oid].has("manage_staff")
+        if ctx.accessible_owners[oid].any_hotel("manage_staff")
     ]
     if not allowed:
         return []

@@ -181,8 +181,12 @@ async def update_my_client(
             )
         ).scalars()
     )
+    # Cross-owner client edit: разрешено, если user имеет manage_bookings
+    # хотя бы на одного owner'а, где у клиента есть бронь (any_hotel —
+    # coarse view, точное per-hotel gating уже было сделано на момент
+    # самой брони).
     has_perm = any(
-        oid in ctx.accessible_owners and ctx.accessible_owners[oid].has("manage_bookings")
+        oid in ctx.accessible_owners and ctx.accessible_owners[oid].any_hotel("manage_bookings")
         for oid in owner_ids_with_bookings
     )
     if not has_perm:

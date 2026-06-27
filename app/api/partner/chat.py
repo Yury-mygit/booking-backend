@@ -103,7 +103,7 @@ async def _resolve_partner_thread(
     perms = ctx.accessible_owners.get(hotel.owner_user_id)
     if perms is None:
         raise APIError(403, "forbidden", "Hotel not in your scope")
-    if require_write and not perms.chat_with_clients:
+    if require_write and not perms.can(hotel.id, "chat_with_clients"):
         raise APIError(403, "permission_denied", "Missing permission: chat_with_clients")
 
     client = (
@@ -209,6 +209,7 @@ async def send_chat_message(
         action="chat.message_sent",
         subject_type="chat_message",
         subject_id=msg.id,
+        hotel_id=hotel_id,
         payload={
             "thread_id": thread.id,
             "hotel_id": hotel_id,

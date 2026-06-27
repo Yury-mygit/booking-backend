@@ -95,6 +95,7 @@ async def confirm_booking(
         action="booking.confirm",
         subject_type="booking",
         subject_id=b.id,
+        hotel_id=hotel_id_for_pub,
         payload={"code": b.code, "hotel_id": hotel_id_for_pub},
     )
     return PartnerBookingView.from_model(b, r, h, c)
@@ -131,6 +132,7 @@ async def mark_paid(
         action="booking.mark_paid",
         subject_type="booking",
         subject_id=b.id,
+        hotel_id=hotel_id_for_pub,
         payload={"code": b.code, "hotel_id": hotel_id_for_pub},
     )
     return PartnerBookingView.from_model(b, r, h, c)
@@ -160,6 +162,7 @@ async def set_postpay(
         action="booking.postpay",
         subject_type="booking",
         subject_id=b.id,
+        hotel_id=hotel_id_for_pub,
         payload={"code": b.code, "postpay": b.postpay},
     )
     return PartnerBookingView.from_model(b, r, h, c)
@@ -213,6 +216,7 @@ async def cancel_booking(
         action="booking.cancel",
         subject_type="booking",
         subject_id=b.id,
+        hotel_id=hotel_id_for_pub,
         payload={"code": b.code, "hotel_id": hotel_id_for_pub},
     )
     return PartnerBookingView.from_model(b, r, h, c)
@@ -275,7 +279,7 @@ async def create_walkin_booking(
     if row is None:
         raise APIError(404, "not_found", "Room not found")
     room, hotel = row
-    if not ctx.accessible_owners[hotel.owner_user_id].has("manage_bookings"):
+    if not ctx.accessible_owners[hotel.owner_user_id].can(hotel.id, "manage_bookings"):
         raise APIError(403, "permission_denied", "Missing permission: manage_bookings")
     if room.capacity < payload.adults + payload.children:
         raise APIError(400, "bad_request", "Too many guests for this room")
@@ -354,6 +358,7 @@ async def create_walkin_booking(
         action="walkin.create",
         subject_type="booking",
         subject_id=booking.id,
+        hotel_id=hotel_id_for_pub,
         payload={
             "code": booking.code,
             "hotel_id": hotel_id_for_pub,

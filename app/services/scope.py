@@ -37,8 +37,17 @@ def scope_owner_ids(ctx: AuthContext, owner_id: int | None = None) -> list[int]:
     return [owner_id]
 
 
-def _check_perm(ctx: AuthContext, owner_user_id: int, require_perm: str) -> None:
-    if not ctx.accessible_owners[owner_user_id].has(require_perm):
+def _check_perm(
+    ctx: AuthContext,
+    owner_user_id: int,
+    hotel_id: int | None,
+    require_perm: str,
+) -> None:
+    """Scoped permission check. `hotel_id=None` ⇒ action не привязан к
+    отелю (e.g. /p/staff CRUD) — учитываются только override и NULL-scope
+    (global) роли."""
+    op = ctx.accessible_owners[owner_user_id]
+    if not op.can(hotel_id, require_perm):
         raise APIError(403, "permission_denied", f"Missing permission: {require_perm}")
 
 
@@ -60,7 +69,7 @@ async def get_my_hotel(
     if hotel is None:
         raise APIError(404, "not_found", "Hotel not found")
     if require_perm is not None:
-        _check_perm(ctx, hotel.owner_user_id, require_perm)
+        _check_perm(ctx, hotel.owner_user_id, hotel.id, require_perm)
     return hotel
 
 
@@ -101,7 +110,7 @@ async def get_my_room(
         raise APIError(404, "not_found", "Room not found")
     room, hotel = row
     if require_perm is not None:
-        _check_perm(ctx, hotel.owner_user_id, require_perm)
+        _check_perm(ctx, hotel.owner_user_id, hotel.id, require_perm)
     return room
 
 
@@ -147,7 +156,7 @@ async def get_my_booking(
     if row is None:
         raise APIError(404, "not_found", "Booking not found")
     if require_perm is not None:
-        _check_perm(ctx, row[2].owner_user_id, require_perm)
+        _check_perm(ctx, row[2].owner_user_id, row[2].id, require_perm)
     return row
 
 

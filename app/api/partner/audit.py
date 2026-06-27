@@ -32,6 +32,7 @@ def _audit_stmt_base(
     until: datetime | None,
     q: str | None,
     actor_user_id: int | None,
+    hotel_id: int | None = None,
 ):
     accessible_ids = scope.scope_owner_ids(ctx, owner_id)
     stmt = (
@@ -51,6 +52,8 @@ def _audit_stmt_base(
         stmt = stmt.where(AuditLog.action == action_filter)
     if subject_type_filter:
         stmt = stmt.where(AuditLog.subject_type == subject_type_filter)
+    if hotel_id is not None:
+        stmt = stmt.where(AuditLog.hotel_id == hotel_id)
     if since:
         stmt = stmt.where(AuditLog.created_at >= since)
     if until:
@@ -81,13 +84,14 @@ async def list_audit(
     until: datetime | None = Query(default=None),
     q: str | None = Query(default=None, max_length=64),
     actor_user_id: int | None = Query(default=None),
+    hotel_id: int | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = _audit_stmt_base(
-        ctx, owner_id, action_filter, subject_type_filter, since, until, q, actor_user_id
+        ctx, owner_id, action_filter, subject_type_filter, since, until, q, actor_user_id, hotel_id
     ).offset(offset).limit(limit)
     rows = (await db.execute(stmt)).all()
     return [
@@ -116,6 +120,7 @@ async def audit_csv(
     until: datetime | None = Query(default=None),
     q: str | None = Query(default=None, max_length=64),
     actor_user_id: int | None = Query(default=None),
+    hotel_id: int | None = Query(default=None),
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
@@ -125,7 +130,7 @@ async def audit_csv(
     from fastapi.responses import StreamingResponse
 
     stmt = _audit_stmt_base(
-        ctx, owner_id, action_filter, subject_type_filter, since, until, q, actor_user_id
+        ctx, owner_id, action_filter, subject_type_filter, since, until, q, actor_user_id, hotel_id
     )
     rows = (await db.execute(stmt)).all()
 

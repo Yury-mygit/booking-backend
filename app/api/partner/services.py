@@ -60,6 +60,7 @@ async def create_service(
         action="service.create",
         subject_type="service",
         subject_id=s.id,
+        hotel_id=hotel_id,
         payload={"hotel_id": hotel_id, "name_ru": s.name_ru},
     )
     return ServicePartnerView.from_model(s)
@@ -88,6 +89,7 @@ async def update_service(
         action="service.update",
         subject_type="service",
         subject_id=s.id,
+        hotel_id=hotel_id,
         payload={"hotel_id": hotel_id, "changed_fields": list(data.keys())},
     )
     return ServicePartnerView.from_model(s)
@@ -114,6 +116,7 @@ async def delete_service(
         action="service.delete",
         subject_type="service",
         subject_id=sid_snap,
+        hotel_id=hotel_id,
         payload=snapshot,
     )
     return None

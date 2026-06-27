@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -462,14 +463,35 @@ class PartnerStaff(Base):
 
 
 class PartnerStaffRole(Base):
-    """Junction: many-to-many между сотрудником и ролями."""
+    """Junction: many-to-many между сотрудником и ролями
+    + per-hotel scope (NULL hotel_id = глобально по партнёру, для legacy и
+    owner-сценариев). Soft-delete через `removed_at`."""
     __tablename__ = "partner_staff_role"
+    __table_args__ = (
+        Index(
+            "uq_psr_staff_role_hotel_active",
+            "staff_id",
+            "role_id",
+            "hotel_id",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+            postgresql_where=text("removed_at IS NULL"),
+        ),
+    )
 
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     staff_id: Mapped[int] = mapped_column(
-        ForeignKey("partner_staff.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("partner_staff.id", ondelete="CASCADE"), nullable=False, index=True
     )
     role_id: Mapped[int] = mapped_column(
-        ForeignKey("partner_role.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("partner_role.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    hotel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 
@@ -509,6 +531,9 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     subject_type: Mapped[str | None] = mapped_column(String(32))
     subject_id: Mapped[int | None] = mapped_column(Integer)
+    hotel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hotels.id", ondelete="SET NULL"), index=True
+    )
     payload: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

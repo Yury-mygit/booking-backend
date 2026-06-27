@@ -19,6 +19,7 @@ from app.core.audit import audit
 from app.services import scope
 from app.models.models import (
     AuditLog,
+    Hotel,
     PartnerRole,
     PartnerStaff,
     PartnerStaffInvite,
@@ -27,6 +28,7 @@ from app.models.models import (
     UserRole,
 )
 from app.schemas.partner import (
+    RoleAssignment,
     StaffCreate,
     StaffInviteAccept,
     StaffInviteCreate,
@@ -35,6 +37,7 @@ from app.schemas.partner import (
     StaffView,
 )
 from app.schemas.partner.staff import TriStatePerms
+from sqlalchemy import func
 
 router = APIRouter()  # prefix задан в partner/__init__.py
 
@@ -62,26 +65,92 @@ async def _load_roles(
 async def _load_staff_roles(
     db: AsyncSession, staff_id: int
 ) -> list[PartnerRole]:
-    """Подгрузить все роли, привязанные к staff'у через junction."""
+    """Distinct список ролей, привязанных к staff'у через активный junction
+    (independent of scope-tuples; нужен для tri-state матрицы и effective
+    perms agg)."""
     return (
         await db.execute(
             select(PartnerRole)
             .join(PartnerStaffRole, PartnerStaffRole.role_id == PartnerRole.id)
-            .where(PartnerStaffRole.staff_id == staff_id)
+            .where(
+                PartnerStaffRole.staff_id == staff_id,
+                PartnerStaffRole.removed_at.is_(None),
+            )
+            .distinct()
             .order_by(PartnerRole.name)
         )
     ).scalars().all()
 
 
-async def _replace_staff_roles(
-    db: AsyncSession, staff_id: int, role_ids: list[int]
+async def _load_staff_assignments(
+    db: AsyncSession, staff_id: int
+) -> list[tuple[int, int | None]]:
+    """Активные scope-tuples (role_id, hotel_id) для staff'а."""
+    rows = (
+        await db.execute(
+            select(PartnerStaffRole.role_id, PartnerStaffRole.hotel_id)
+            .where(
+                PartnerStaffRole.staff_id == staff_id,
+                PartnerStaffRole.removed_at.is_(None),
+            )
+            .order_by(PartnerStaffRole.role_id, PartnerStaffRole.hotel_id.nulls_first())
+        )
+    ).all()
+    return [(rid, hid) for (rid, hid) in rows]
+
+
+async def _validate_hotel_ids(
+    db: AsyncSession, owner_user_id: int, hotel_ids: set[int]
 ) -> None:
-    """Полностью заменить junction-rows у staff'а. role_ids уже валидирован."""
+    """Убедиться, что все hotel_id принадлежат owner'у."""
+    if not hotel_ids:
+        return
+    cnt = (
+        await db.execute(
+            select(func.count(Hotel.id)).where(
+                Hotel.id.in_(hotel_ids),
+                Hotel.owner_user_id == owner_user_id,
+            )
+        )
+    ).scalar_one()
+    if cnt != len(hotel_ids):
+        raise APIError(404, "not_found", "Hotel not found")
+
+
+async def _set_staff_assignments(
+    db: AsyncSession,
+    staff_id: int,
+    owner_user_id: int,
+    assignments: list[RoleAssignment],
+) -> None:
+    """Replace активного набора scope-tuples: soft-delete текущих + INSERT
+    новых. Валидирует, что role_ids и hotel_ids принадлежат owner'у."""
+    role_ids = {a.role_id for a in assignments}
+    hotel_ids = {a.hotel_id for a in assignments if a.hotel_id is not None}
+    if role_ids:
+        await _load_roles(db, owner_user_id, list(role_ids))
+    await _validate_hotel_ids(db, owner_user_id, hotel_ids)
+
+    # Soft-delete current active rows.
     await db.execute(
-        delete(PartnerStaffRole).where(PartnerStaffRole.staff_id == staff_id)
+        PartnerStaffRole.__table__.update()
+        .where(
+            PartnerStaffRole.staff_id == staff_id,
+            PartnerStaffRole.removed_at.is_(None),
+        )
+        .values(removed_at=func.now())
     )
-    for rid in {rid for rid in role_ids}:
-        db.add(PartnerStaffRole(staff_id=staff_id, role_id=rid))
+    # Dedup new assignments (role_id, hotel_id) — partial unique с
+    # NULLS NOT DISTINCT защищает БД, но нам нужно ещё чистить payload.
+    seen: set[tuple[int, int | None]] = set()
+    for a in assignments:
+        key = (a.role_id, a.hotel_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        db.add(PartnerStaffRole(
+            staff_id=staff_id, role_id=a.role_id, hotel_id=a.hotel_id
+        ))
 
 
 # ─── Staff ────────────────────────────────────────────────────────────────
@@ -115,21 +184,31 @@ async def list_staff(
     ).all()
     if not staff_rows:
         return []
-    # Один SQL: junction × role для всех staff'ов сразу. Группируем в Python.
+    # 1) Distinct roles per staff (для tri-state матрицы + effective).
+    # 2) Active scope-tuples (role_id, hotel_id) per staff.
     staff_ids = [ps.id for (ps, _) in staff_rows]
     role_rows = (
         await db.execute(
-            select(PartnerStaffRole.staff_id, PartnerRole)
+            select(PartnerStaffRole.staff_id, PartnerRole, PartnerStaffRole.hotel_id)
             .join(PartnerRole, PartnerRole.id == PartnerStaffRole.role_id)
-            .where(PartnerStaffRole.staff_id.in_(staff_ids))
-            .order_by(PartnerRole.name)
+            .where(
+                PartnerStaffRole.staff_id.in_(staff_ids),
+                PartnerStaffRole.removed_at.is_(None),
+            )
+            .order_by(PartnerRole.name, PartnerStaffRole.hotel_id.nulls_first())
         )
     ).all()
     roles_by_staff: dict[int, list[PartnerRole]] = {}
-    for sid, role in role_rows:
-        roles_by_staff.setdefault(sid, []).append(role)
+    assignments_by_staff: dict[int, list[tuple[int, int | None]]] = {}
+    for sid, role, hid in role_rows:
+        roles_seen = roles_by_staff.setdefault(sid, [])
+        if role.id not in {r.id for r in roles_seen}:
+            roles_seen.append(role)
+        assignments_by_staff.setdefault(sid, []).append((role.id, hid))
     return [
-        StaffView.from_model(ps, u, roles_by_staff.get(ps.id, []))
+        StaffView.from_model(
+            ps, u, roles_by_staff.get(ps.id, []), assignments_by_staff.get(ps.id, []),
+        )
         for (ps, u) in staff_rows
     ]
 
@@ -185,8 +264,6 @@ async def add_staff(
     if existing is not None:
         raise APIError(409, "already_member", "User is already a staff member")
 
-    roles = await _load_roles(db, owner_id, payload.role_ids)
-
     ps = PartnerStaff(
         owner_user_id=owner_id,
         staff_user_id=staff_user.id,
@@ -203,9 +280,11 @@ async def add_staff(
     )
     db.add(ps)
     await db.flush()  # нужен ps.id для junction
-    await _replace_staff_roles(db, ps.id, [r.id for r in roles])
+    await _set_staff_assignments(db, ps.id, owner_id, payload.role_assignments)
     await db.commit()
     await db.refresh(ps)
+    roles = await _load_staff_roles(db, ps.id)
+    assignments = await _load_staff_assignments(db, ps.id)
     await audit(
         db, ctx,
         owner_user_id=owner_id,
@@ -215,12 +294,12 @@ async def add_staff(
         payload={
             "staff_user_id": staff_user.id,
             "telegram_id": staff_user.telegram_id,
-            "role_ids": [r.id for r in roles],
+            "role_assignments": [a.model_dump() for a in payload.role_assignments],
             "perms": payload.perms.model_dump(),
             "note": payload.note,
         },
     )
-    return StaffView.from_model(ps, staff_user, roles)
+    return StaffView.from_model(ps, staff_user, roles, assignments)
 
 
 @router.put("/staff/{staff_id}", response_model=StaffView)
@@ -247,31 +326,36 @@ async def update_staff(
         raise APIError(403, "permission_denied", "Missing permission: manage_staff")
 
     diff: dict = {}
-    if payload.role_ids is not None:
-        # Полная замена набора ролей (валидируем принадлежность owner'у).
-        new_roles = await _load_roles(db, ps.owner_user_id, payload.role_ids)
-        current = await _load_staff_roles(db, ps.id)
-        before_ids = sorted(r.id for r in current)
-        after_ids = sorted({r.id for r in new_roles})
-        if before_ids != after_ids:
-            diff["role_ids"] = {"before": before_ids, "after": after_ids}
-            await _replace_staff_roles(db, ps.id, after_ids)
+    if payload.role_assignments is not None:
+        # Полная замена set'а активных scope-tuples. Soft-delete + INSERT.
+        before = await _load_staff_assignments(db, ps.id)
+        before_set = sorted(before)
+        after_set = sorted({(a.role_id, a.hotel_id) for a in payload.role_assignments})
+        if before_set != after_set:
+            diff["role_assignments"] = {
+                "before": [{"role_id": r, "hotel_id": h} for (r, h) in before_set],
+                "after": [{"role_id": r, "hotel_id": h} for (r, h) in after_set],
+            }
+            await _set_staff_assignments(
+                db, ps.id, ps.owner_user_id, payload.role_assignments
+            )
     if payload.perms is not None:
-        before = TriStatePerms.from_model(ps).model_dump()
+        before_p = TriStatePerms.from_model(ps).model_dump()
         ps.perm_manage_hotel = payload.perms.manage_hotel
         ps.perm_manage_rooms = payload.perms.manage_rooms
         ps.perm_manage_bookings = payload.perms.manage_bookings
         ps.perm_manage_staff = payload.perms.manage_staff
         ps.perm_chat_with_clients = payload.perms.chat_with_clients
-        after = payload.perms.model_dump()
-        if before != after:
-            diff["perms"] = {"before": before, "after": after}
+        after_p = payload.perms.model_dump()
+        if before_p != after_p:
+            diff["perms"] = {"before": before_p, "after": after_p}
     if payload.note is not None and payload.note != ps.note:
         diff["note"] = {"before": ps.note, "after": payload.note}
         ps.note = payload.note
     await db.commit()
     await db.refresh(ps)
     roles = await _load_staff_roles(db, ps.id)
+    assignments = await _load_staff_assignments(db, ps.id)
     if diff:
         await audit(
             db, ctx,
@@ -281,7 +365,7 @@ async def update_staff(
             subject_id=ps.id,
             payload=diff,
         )
-    return StaffView.from_model(ps, staff_user, roles)
+    return StaffView.from_model(ps, staff_user, roles, assignments)
 
 
 @router.delete("/staff/{staff_id}", status_code=204)
@@ -302,10 +386,12 @@ async def remove_staff(
         raise APIError(403, "permission_denied", "Missing permission: manage_staff")
 
     owner_id = ps.owner_user_id
-    role_ids_snapshot = [r.id for r in await _load_staff_roles(db, ps.id)]
+    assignments_snapshot = await _load_staff_assignments(db, ps.id)
     snapshot = {
         "staff_user_id": ps.staff_user_id,
-        "role_ids": role_ids_snapshot,
+        "role_assignments": [
+            {"role_id": rid, "hotel_id": hid} for (rid, hid) in assignments_snapshot
+        ],
         "perms": TriStatePerms.from_model(ps).model_dump(),
         "note": ps.note,
     }

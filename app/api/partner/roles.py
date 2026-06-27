@@ -155,13 +155,18 @@ async def delete_role(
         raise APIError(404, "not_found", "Role not found")
     _require_owner_with_manage_staff(ctx, role.owner_user_id)
 
-    # 409 если есть junction-записи — owner должен переназначить
+    # 409 если есть активные junction-записи — owner должен переназначить.
+    # Soft-deleted рядки не блокируют delete (audit-trail сохраняется).
     in_use = (
         await db.execute(
             select(PartnerStaff, User)
             .join(PartnerStaffRole, PartnerStaffRole.staff_id == PartnerStaff.id)
             .join(User, User.id == PartnerStaff.staff_user_id)
-            .where(PartnerStaffRole.role_id == role_id)
+            .where(
+                PartnerStaffRole.role_id == role_id,
+                PartnerStaffRole.removed_at.is_(None),
+            )
+            .distinct()
         )
     ).all()
     if in_use:

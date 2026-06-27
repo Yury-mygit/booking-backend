@@ -162,12 +162,23 @@ async def _hotel_recipients(db: AsyncSession, hotel: Hotel) -> list[User]:
     # AND ЛЮБАЯ из ролей staff'а даёт perm=true). NULL/false override на
     # staff отключает наследование от любых ролей. DISTINCT — junction
     # размножает ряды по количеству ролей.
+    # TG-чат-нотификации шлём только тем, у кого scope покрывает текущий
+    # hotel (или global NULL-scope). Junction отфильтрован по
+    # `removed_at IS NULL`.
     staff_users = (
         await db.execute(
             select(User)
             .distinct()
             .join(PartnerStaff, PartnerStaff.staff_user_id == User.id)
-            .outerjoin(PartnerStaffRole, PartnerStaffRole.staff_id == PartnerStaff.id)
+            .outerjoin(
+                PartnerStaffRole,
+                (PartnerStaffRole.staff_id == PartnerStaff.id)
+                & (PartnerStaffRole.removed_at.is_(None))
+                & or_(
+                    PartnerStaffRole.hotel_id == hotel.id,
+                    PartnerStaffRole.hotel_id.is_(None),
+                ),
+            )
             .outerjoin(PartnerRole, PartnerRole.id == PartnerStaffRole.role_id)
             .where(
                 PartnerStaff.owner_user_id == hotel.owner_user_id,

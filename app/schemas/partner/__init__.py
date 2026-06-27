@@ -42,6 +42,7 @@ from app.schemas.partner.services import (
 )
 from app.schemas.partner.staff import (
     OwnerAccess,
+    RoleAssignment,
     RoleCreate,
     RoleUpdate,
     RoleView,
@@ -73,6 +74,7 @@ __all__ = [
     "OwnerAccess",
     "PartnerBookingPostpaySet",
     "PartnerBookingView",
+    "RoleAssignment",
     "RoleCreate",
     "RoleUpdate",
     "RoleView",

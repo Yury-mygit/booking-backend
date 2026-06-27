@@ -100,9 +100,16 @@ class OwnerAccess(BaseModel):
     perms: StaffPerms
 
 
+class RoleAssignment(BaseModel):
+    """Один scope-туpl: «роль X действует на отель Y» (Y=None = global,
+    для legacy/owner-сценариев)."""
+    role_id: int
+    hotel_id: int | None = None
+
+
 class StaffCreate(BaseModel):
     telegram_id: int
-    role_ids: list[int] = Field(default_factory=list)
+    role_assignments: list[RoleAssignment] = Field(default_factory=list)
     perms: TriStatePerms = Field(default_factory=TriStatePerms)
     note: str | None = Field(default=None, max_length=128)
     first_name: str | None = Field(default=None, max_length=128)
@@ -111,10 +118,12 @@ class StaffCreate(BaseModel):
 
 
 class StaffUpdate(BaseModel):
-    """role_ids: None = «не трогать junction»; [] = «снять все роли»; [1,2] = replace.
-    perms: None = «не трогать матрицу»; объект = replace всех 5 tri-state полей."""
+    """role_assignments: None = «не трогать junction»; [] = «снять все
+    активные scope-роли»; список = replace (soft-delete старых + INSERT
+    новых).
+    perms: None = «не трогать матрицу»; объект = replace всех 5 tri-state."""
 
-    role_ids: list[int] | None = None
+    role_assignments: list[RoleAssignment] | None = None
     perms: TriStatePerms | None = None
     note: str | None = Field(default=None, max_length=128)
 
@@ -129,6 +138,7 @@ class StaffView(BaseModel):
     last_name: str | None
     middle_name: str | None
     roles: list[RoleView]
+    role_assignments: list[RoleAssignment]
     perms: TriStatePerms
     effective_perms: StaffPerms
     note: str | None
@@ -136,10 +146,15 @@ class StaffView(BaseModel):
 
     @classmethod
     def from_model(
-        cls, ps: PartnerStaff, staff_user: User, roles: list[PartnerRole] | None = None
+        cls,
+        ps: PartnerStaff,
+        staff_user: User,
+        roles: list[PartnerRole] | None = None,
+        assignments: list[tuple[int, int | None]] | None = None,
     ) -> "StaffView":
         from app.core.display import staff_display_name
         roles = roles or []
+        assignments = assignments or []
         return cls(
             id=ps.id,
             owner_user_id=ps.owner_user_id,
@@ -150,6 +165,9 @@ class StaffView(BaseModel):
             last_name=ps.last_name,
             middle_name=ps.middle_name,
             roles=[RoleView.from_model(r) for r in roles],
+            role_assignments=[
+                RoleAssignment(role_id=rid, hotel_id=hid) for (rid, hid) in assignments
+            ],
             perms=TriStatePerms.from_model(ps),
             effective_perms=compute_effective(ps, roles),
             note=ps.note,

@@ -2,17 +2,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Зависимости отдельным слоем: при правке кода в `app/` этот слой
-# переиспользуется из кеша, pip install не запускается заново.
-# Wheels положены офлайн (см. wheels/) — `pypi.org` из РФ недоступен,
-# зеркала отстают по версиям пакетов.
+# hatchling builds the local `booking-app` package, so app/ must be
+# present before pip install. Deps resolve from pypi (egress OK on new
+# host; the old offline wheels/ crutch was for the RF-blocked host).
 COPY pyproject.toml ./
-COPY wheels ./wheels/
-RUN pip install --no-cache-dir --no-index --find-links ./wheels .
-
-# Исходники и миграции после pip install — их правка не инвалидирует
-# слой с зависимостями.
 COPY app ./app
+RUN pip install --no-cache-dir .
+
 COPY alembic.ini ./
 COPY alembic ./alembic
 

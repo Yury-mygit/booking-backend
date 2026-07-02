@@ -14,6 +14,7 @@ from app.core.deps import AuthContext, require_verified_partner
 from app.core.exceptions import APIError
 from app.core.audit import audit
 from app.services import scope
+from app.services.hotel_share import share_hotel_to_self
 from app.models.models import (
     Booking,
     BookingStatus,
@@ -368,4 +369,21 @@ async def delete_hotel(
     )
     return None
 
+
+@router.post("/hotels/{hotel_id}/share-to-self", status_code=204)
+async def share_hotel_to_self_endpoint(
+    hotel_id: int,
+    ctx: AuthContext = Depends(require_verified_partner),
+    db: AsyncSession = Depends(get_db),
+):
+    """Отправить инициатору в личку от бота deep-link на этот отель."""
+    hotel = await scope.get_my_hotel(db, ctx, hotel_id)
+    outcome = await share_hotel_to_self(db, ctx.user, hotel)
+    if outcome == "ok":
+        return None
+    if outcome == "bot_not_started":
+        raise APIError(409, "bot_not_started", "Press /start in @rforge_stay_bot")
+    if outcome == "not_configured":
+        raise APIError(500, "config", "TG_BOT_TOKEN is empty")
+    raise APIError(502, "tg_upstream", "Telegram bot API error, retry later")
 

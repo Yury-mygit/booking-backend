@@ -19,7 +19,6 @@ SPA читает поле (Этап 5) и показывает баннер «н
 import time
 from typing import Iterable
 
-import httpx
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +36,7 @@ from app.models.models import (
     PartnerStaffRole,
     User,
 )
+from app.services.tg_bot import hotel_name_by_lang, send_button_message
 
 _DEDUP_TTL_SEC = 30
 _DEDUP_MAX_ENTRIES = 4096
@@ -76,14 +76,6 @@ def _preview(body: str) -> str:
     return body if len(body) <= 120 else body[:119] + "…"
 
 
-def _hotel_name(hotel: Hotel, lang: str) -> str:
-    if lang == "ky" and hotel.name_ky:
-        return hotel.name_ky
-    if lang == "en" and hotel.name_en:
-        return hotel.name_en
-    return hotel.name_ru
-
-
 def _client_name(user: User) -> str:
     name = (user.first_name or "").strip()
     last = (user.last_name or "").strip()
@@ -100,28 +92,6 @@ def _lang_str(user_lang) -> str:
 def _deep_link(start_param: str) -> str:
     base = settings.public_base_app.rstrip("/") + "/"
     return f"{base}?startapp={start_param}"
-
-
-async def _send(chat_id: int, text: str, deep_link: str, btn: str) -> int:
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "reply_markup": {
-            "inline_keyboard": [
-                [{"text": btn, "web_app": {"url": deep_link}}],
-            ],
-        },
-    }
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(
-                f"https://api.telegram.org/bot{settings.tg_bot_token}/sendMessage",
-                json=payload,
-            )
-        return r.status_code
-    except httpx.HTTPError as e:
-        print(f"[tg_notify] send error: {e}")
-        return 0
 
 
 async def _set_blocked(db: AsyncSession, user_id: int, blocked: bool) -> None:
@@ -143,7 +113,9 @@ async def _notify_one(
     if _should_skip(recipient.id, thread_id):
         return
     lang = _lang_str(recipient.lang)
-    status = await _send(recipient.telegram_id, text, _deep_link(start_param), _BTN[lang])
+    status = await send_button_message(
+        recipient.telegram_id, text, _deep_link(start_param), _BTN[lang]
+    )
     if status == 200:
         if recipient.bot_blocked_or_unreachable:
             await _set_blocked(db, recipient.id, False)
@@ -255,7 +227,7 @@ async def notify_chat_message(thread_id: int, msg_id: int) -> None:
                     return
                 lang = _lang_str(client_user.lang)
                 text = _TPL_TO_CLIENT[lang].format(
-                    hotel=_hotel_name(hotel, lang), preview=preview
+                    hotel=hotel_name_by_lang(hotel, lang), preview=preview
                 )
                 start_param = f"chat_{thread_id}"
                 await _notify_one(db, client_user, text, start_param, thread_id)

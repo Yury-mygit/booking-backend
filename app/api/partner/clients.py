@@ -22,6 +22,7 @@ from app.schemas.partner import (
     ClientUpdate,
     PartnerBookingView,
 )
+from app.schemas.partner.clients import ClientChatHotel
 from app.utils import (
     normalize_email,
     normalize_phone,
@@ -38,22 +39,62 @@ async def list_my_clients(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    """All clients who have at least one booking in any of my accessible
-    owners' hotels (optionally scoped to one ?owner_id=)."""
+    """Clients with either a booking OR an open chat thread in my accessible
+    owners' hotels (optionally scoped to one ?owner_id=). Prospect'ы (только
+    chat, без броней) идут вместе с booked, флаг `is_prospect` в response.
+    Sort — unified `last_activity_at = max(last_booking_at, last_message_at)` DESC.
+    """
     accessible_ids = scope.scope_owner_ids(ctx, owner_id)
+    if not accessible_ids:
+        return []
     from sqlalchemy import func as sa_func
-    stmt = (
+
+    booked_subq = (
         select(
-            Client,
+            Client.id.label("client_id"),
             sa_func.count(Booking.id).label("cnt"),
             sa_func.max(Booking.check_in).label("last_date"),
+            sa_func.max(Booking.created_at).label("booking_activity"),
         )
         .join(Booking, Booking.client_id == Client.id)
         .join(Room, Room.id == Booking.room_id)
         .join(Hotel, Hotel.id == Room.hotel_id)
         .where(Hotel.owner_user_id.in_(accessible_ids))
         .group_by(Client.id)
-        .order_by(sa_func.max(Booking.created_at).desc())
+        .subquery()
+    )
+
+    chats_subq = (
+        select(
+            Client.id.label("client_id"),
+            sa_func.max(ChatThread.last_message_at).label("chat_activity"),
+        )
+        .join(ChatThread, ChatThread.client_user_id == Client.user_id)
+        .join(Hotel, Hotel.id == ChatThread.hotel_id)
+        .where(
+            Hotel.owner_user_id.in_(accessible_ids),
+            ChatThread.last_message_at.is_not(None),
+        )
+        .group_by(Client.id)
+        .subquery()
+    )
+
+    activity = sa_func.greatest(
+        booked_subq.c.booking_activity, chats_subq.c.chat_activity
+    )
+    stmt = (
+        select(
+            Client,
+            sa_func.coalesce(booked_subq.c.cnt, 0).label("cnt"),
+            booked_subq.c.last_date.label("last_date"),
+        )
+        .outerjoin(booked_subq, booked_subq.c.client_id == Client.id)
+        .outerjoin(chats_subq, chats_subq.c.client_id == Client.id)
+        .where(
+            (booked_subq.c.cnt.is_not(None))
+            | (chats_subq.c.chat_activity.is_not(None))
+        )
+        .order_by(activity.desc().nullslast())
         .limit(500)
     )
     rows = (await db.execute(stmt)).all()
@@ -64,6 +105,7 @@ async def list_my_clients(
             bookings_count=cnt,
             last_booking_date=last,
             has_unread_chat=(c.id in unread),
+            is_prospect=(cnt == 0),
         )
         for (c, cnt, last) in rows
     ]
@@ -125,7 +167,7 @@ async def get_my_client(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    c = await scope.get_my_client(db, ctx, client_id)
+    c = await scope.get_my_client(db, ctx, client_id, include_chat_only=True)
     accessible_ids = list(ctx.accessible_owners.keys())
     from sqlalchemy import func as sa_func
     cnt, last = (
@@ -136,7 +178,43 @@ async def get_my_client(
             .where(Booking.client_id == c.id, Hotel.owner_user_id.in_(accessible_ids))
         )
     ).one()
-    return ClientPartnerView.from_model(c, bookings_count=cnt or 0, last_booking_date=last)
+    cnt = cnt or 0
+    # Hotels в моих owners, где у клиента есть открытый chat_thread, но нет
+    # bookings — surface для prospect-thread'ов в client_edit_chat.
+    chat_hotels: list[ClientChatHotel] = []
+    if c.user_id is not None:
+        booked_hotel_ids_subq = (
+            select(Hotel.id)
+            .join(Room, Room.hotel_id == Hotel.id)
+            .join(Booking, Booking.room_id == Room.id)
+            .where(
+                Booking.client_id == c.id,
+                Hotel.owner_user_id.in_(accessible_ids),
+            )
+        )
+        rows = (
+            await db.execute(
+                select(Hotel.id, Hotel.name_ru, Hotel.owner_user_id)
+                .join(ChatThread, ChatThread.hotel_id == Hotel.id)
+                .where(
+                    ChatThread.client_user_id == c.user_id,
+                    Hotel.owner_user_id.in_(accessible_ids),
+                    Hotel.id.notin_(booked_hotel_ids_subq),
+                )
+                .distinct()
+            )
+        ).all()
+        chat_hotels = [
+            ClientChatHotel(id=h_id, name_ru=name, owner_user_id=owner)
+            for (h_id, name, owner) in rows
+        ]
+    return ClientPartnerView.from_model(
+        c,
+        bookings_count=cnt,
+        last_booking_date=last,
+        is_prospect=(cnt == 0),
+        chat_hotels=chat_hotels,
+    )
 
 
 @router.get("/clients/{client_id}/bookings", response_model=list[PartnerBookingView])
@@ -145,7 +223,7 @@ async def list_my_client_bookings(
     ctx: AuthContext = Depends(require_verified_partner),
     db: AsyncSession = Depends(get_db),
 ):
-    c = await scope.get_my_client(db, ctx, client_id)
+    c = await scope.get_my_client(db, ctx, client_id, include_chat_only=True)
     accessible_ids = list(ctx.accessible_owners.keys())
     rows = (
         await db.execute(

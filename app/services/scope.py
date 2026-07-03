@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import AuthContext
 from app.core.exceptions import APIError
-from app.models.models import Booking, Client, Hotel, HotelService, Room
+from app.models.models import Booking, ChatThread, Client, Hotel, HotelService, Room
 
 
 def scope_owner_ids(ctx: AuthContext, owner_id: int | None = None) -> list[int]:
@@ -164,19 +164,36 @@ async def get_my_client(
     db: AsyncSession,
     ctx: AuthContext,
     client_id: int,
+    *,
+    include_chat_only: bool = False,
 ) -> Client:
-    """Client виден partner-scope юзеру только если у него есть бронь
-    в одном из отелей accessible_owners."""
+    """Client виден partner-scope юзеру если у него есть бронь в одном из
+    отелей accessible_owners. При `include_chat_only=True` также виден,
+    если у него открыт chat_thread с одним из моих отелей (prospect).
+    """
+    owner_ids = scope_owner_ids(ctx)
     c = (
         await db.execute(
             select(Client)
             .join(Booking, Booking.client_id == Client.id)
             .join(Room, Room.id == Booking.room_id)
             .join(Hotel, Hotel.id == Room.hotel_id)
-            .where(Client.id == client_id, Hotel.owner_user_id.in_(scope_owner_ids(ctx)))
+            .where(Client.id == client_id, Hotel.owner_user_id.in_(owner_ids))
             .limit(1)
         )
     ).scalar_one_or_none()
-    if c is None:
-        raise APIError(404, "not_found", "Client not found")
-    return c
+    if c is not None:
+        return c
+    if include_chat_only:
+        c = (
+            await db.execute(
+                select(Client)
+                .join(ChatThread, ChatThread.client_user_id == Client.user_id)
+                .join(Hotel, Hotel.id == ChatThread.hotel_id)
+                .where(Client.id == client_id, Hotel.owner_user_id.in_(owner_ids))
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if c is not None:
+            return c
+    raise APIError(404, "not_found", "Client not found")

@@ -144,6 +144,11 @@ class ChatSubjectType(str, enum.Enum):
     room = "room"
 
 
+class ChatMessageKind(str, enum.Enum):
+    user = "user"
+    cancellation_request = "cancellation_request"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -575,6 +580,11 @@ class ChatMessage(Base):
         ENUM(ChatSubjectType, name="chat_subject_type")
     )
     subject_id: Mapped[int | None] = mapped_column(Integer)
+    kind: Mapped[ChatMessageKind] = mapped_column(
+        ENUM(ChatMessageKind, name="chat_message_kind"),
+        nullable=False,
+        server_default=ChatMessageKind.user.value,
+    )
     body: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

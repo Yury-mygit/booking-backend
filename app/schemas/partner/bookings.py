@@ -32,11 +32,17 @@ class PartnerBookingView(BaseModel):
     status: BookingStatus
     postpay: bool
     confirmed: bool
+    has_cancellation_request: bool = False
     created_at: datetime
 
     @classmethod
     def from_model(
-        cls, b: Booking, r: Room, h: Hotel, c: Client
+        cls,
+        b: Booking,
+        r: Room,
+        h: Hotel,
+        c: Client,
+        has_cancellation_request: bool = False,
     ) -> "PartnerBookingView":
         return cls(
             id=b.id,
@@ -57,6 +63,7 @@ class PartnerBookingView(BaseModel):
             status=b.status,
             postpay=b.postpay,
             confirmed=b.confirmed,
+            has_cancellation_request=has_cancellation_request,
             created_at=b.created_at,
         )
 

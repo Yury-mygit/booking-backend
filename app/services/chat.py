@@ -17,6 +17,7 @@ from app.core import chat_pubsub
 from app.core.exceptions import APIError
 from app.models.models import (
     ChatMessage,
+    ChatMessageKind,
     ChatSenderKind,
     ChatSubjectType,
     ChatThread,
@@ -101,8 +102,12 @@ async def append_message(
     body: str,
     subject_type: ChatSubjectType | None,
     subject_id: int | None,
+    kind: ChatMessageKind = ChatMessageKind.user,
 ) -> ChatMessage:
-    _check_rate_limit(sender_kind, sender_user_id)
+    # Rate-limit применяется только к user-сообщениям; системные
+    # (cancellation_request и т.п.) шлёт бэк по своим правилам.
+    if kind == ChatMessageKind.user:
+        _check_rate_limit(sender_kind, sender_user_id)
 
     body = body.strip()
     if not body:
@@ -116,6 +121,7 @@ async def append_message(
         sender_user_id=sender_user_id,
         subject_type=subject_type,
         subject_id=subject_id,
+        kind=kind,
         body=body,
     )
     db.add(msg)
@@ -153,6 +159,7 @@ async def append_message(
             "sender_kind": msg.sender_kind.value,
             "subject_type": msg.subject_type.value if msg.subject_type else None,
             "subject_id": msg.subject_id,
+            "kind": msg.kind.value,
             "body": msg.body,
             "created_at": msg.created_at.isoformat(),
         },

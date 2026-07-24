@@ -6,7 +6,7 @@ Walk-in: партнёрское создание брони (postpay=true, confi
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import delete, select
+from sqlalchemy import delete, exists, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,9 @@ from app.models.models import (
     AvailabilityStatus,
     Booking,
     BookingStatus,
+    ChatMessage,
+    ChatMessageKind,
+    ChatSubjectType,
     Client,
     Hotel,
     Room,
@@ -52,8 +55,19 @@ async def list_incoming_bookings(
     db: AsyncSession = Depends(get_db),
 ):
     accessible_ids = scope.scope_owner_ids(ctx, owner_id)
+    # TBB-31: маркер «⚠ запрошена отмена» — EXISTS системки в чате брони.
+    has_cancel_req = (
+        exists()
+        .where(
+            ChatMessage.subject_type == ChatSubjectType.booking,
+            ChatMessage.subject_id == Booking.id,
+            ChatMessage.kind == ChatMessageKind.cancellation_request,
+        )
+        .correlate(Booking)
+        .label("has_cancellation_request")
+    )
     stmt = (
-        select(Booking, Room, Hotel, Client)
+        select(Booking, Room, Hotel, Client, has_cancel_req)
         .join(Room, Room.id == Booking.room_id)
         .join(Hotel, Hotel.id == Room.hotel_id)
         .join(Client, Client.id == Booking.client_id)
@@ -67,7 +81,10 @@ async def list_incoming_bookings(
         stmt = stmt.where(Hotel.id == hotel_id)
 
     rows = (await db.execute(stmt)).all()
-    return [PartnerBookingView.from_model(b, r, h, c) for b, r, h, c in rows]
+    return [
+        PartnerBookingView.from_model(b, r, h, c, has_cancellation_request=bool(hcr))
+        for b, r, h, c, hcr in rows
+    ]
 
 
 @router.post("/bookings/{code}/confirm", response_model=PartnerBookingView)

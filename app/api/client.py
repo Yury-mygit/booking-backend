@@ -31,7 +31,14 @@ from app.models.models import (
     RoomStatus,
     UserRole,
 )
-from app.schemas.bookings import BookingMediaResponse, BookingResponse, CreateBookingRequest
+from app.schemas.bookings import (
+    BookingMediaResponse,
+    BookingResponse,
+    CancellationRequestBody,
+    CancellationRequestResponse,
+    CreateBookingRequest,
+)
+from app.services import cancellation as cancellation_service
 from app.utils import date_range_nights, gen_booking_code, get_or_create_client_for_user
 
 router = APIRouter(prefix="/c", tags=["client"])
@@ -289,3 +296,48 @@ async def cancel_my_booking(
     await db.refresh(booking)
     await pubsub.publish_refresh(hotel_id_for_pub)
     return await _build_response(db, booking)
+
+
+@router.post(
+    "/bookings/{code}/cancellation-request",
+    response_model=CancellationRequestResponse,
+)
+async def request_booking_cancellation(
+    code: str,
+    body: CancellationRequestBody,
+    ctx: AuthContext = Depends(require_role(UserRole.client)),
+    db: AsyncSession = Depends(get_db),
+) -> CancellationRequestResponse:
+    """TBB-31: клиент запрашивает отмену подтверждённого бронирования.
+
+    Не меняет booking.status — бронь остаётся confirmed. Создаёт
+    системное сообщение в чате брони; партнёр обрабатывает вручную.
+    """
+    booking = (
+        await db.execute(
+            select(Booking)
+            .join(Client, Client.id == Booking.client_id)
+            .where(Booking.code == code, Client.user_id == ctx.user.id)
+        )
+    ).scalar_one_or_none()
+    if booking is None:
+        raise APIError(404, "not_found", "Booking not found")
+    if not booking.confirmed:
+        raise APIError(
+            409,
+            "not_confirmed",
+            "Only confirmed bookings can be cancelled through this flow",
+        )
+    if booking.status in (BookingStatus.cancelled, BookingStatus.refunded):
+        raise APIError(409, "conflict", f"Booking is already {booking.status.value}")
+
+    msg = await cancellation_service.create_cancellation_request(
+        db,
+        booking=booking,
+        reasons=[r.value for r in body.reasons],
+        note=body.note,
+        client_user=ctx.user,
+    )
+    return CancellationRequestResponse(
+        booking_code=booking.code, requested_at=msg.created_at
+    )

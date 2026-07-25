@@ -114,6 +114,11 @@ class BookingStatus(str, enum.Enum):
     refunded = "refunded"
 
 
+class BookingSource(str, enum.Enum):
+    online = "online"
+    walkin = "walkin"
+
+
 class PaymentProvider(str, enum.Enum):
     mock = "mock"
     elqr = "elqr"
@@ -347,8 +352,10 @@ class Booking(Base):
         nullable=False,
         server_default=BookingStatus.pending.value,
     )
-    postpay: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("false")
+    source: Mapped[BookingSource] = mapped_column(
+        ENUM(BookingSource, name="booking_source"),
+        nullable=False,
+        server_default=BookingSource.online.value,
     )
     confirmed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")

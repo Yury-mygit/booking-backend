@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, model_validator
 class GuestsFields(BaseModel):
     """Mixin: structural guests fields with validation.
 
-    Used by Create-schemas (CreateBookingRequest, WalkinBookingCreate).
+    Used by Create-schemas (CreateBookingRequest).
     View-schemas declare the same fields without the validator —
     DB is source of truth on the way out.
     """

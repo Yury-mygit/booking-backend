@@ -6,7 +6,6 @@ GET  /c/bookings, /c/bookings/{code} — мои брони (фильтр по cl
 сессии).
 
 Платежи живут в `payments.py` (тот же префикс /c, отдельный модуль).
-Walk-in бронирования (от лица партнёра) — в `partner.py` /p/walkin-bookings.
 """
 from datetime import date
 
@@ -77,7 +76,6 @@ async def _build_response(db: AsyncSession, booking: Booking) -> BookingResponse
         child_ages=booking.child_ages,
         total_kgs=booking.total_kgs,
         status=booking.status,
-        postpay=booking.postpay,
         confirmed=booking.confirmed,
         created_at=booking.created_at,
     )

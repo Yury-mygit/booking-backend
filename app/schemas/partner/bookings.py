@@ -1,16 +1,14 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.models.models import (
     Booking,
     BookingStatus,
     Client,
-    DocKind,
     Hotel,
     Room,
 )
-from app.schemas._guests import GuestsFields
 
 
 class PartnerBookingView(BaseModel):
@@ -30,7 +28,6 @@ class PartnerBookingView(BaseModel):
     child_ages: list[int] | None
     total_kgs: int
     status: BookingStatus
-    postpay: bool
     confirmed: bool
     has_cancellation_request: bool = False
     created_at: datetime
@@ -61,24 +58,7 @@ class PartnerBookingView(BaseModel):
             child_ages=b.child_ages,
             total_kgs=b.total_kgs,
             status=b.status,
-            postpay=b.postpay,
             confirmed=b.confirmed,
             has_cancellation_request=has_cancellation_request,
             created_at=b.created_at,
         )
-
-
-class PartnerBookingPostpaySet(BaseModel):
-    postpay: bool
-
-
-class WalkinBookingCreate(GuestsFields):
-    room_id: int
-    check_in: date
-    check_out: date
-    first_name: str = Field(min_length=1, max_length=128)
-    last_name: str | None = Field(default=None, max_length=128)
-    phone: str | None = Field(default=None, max_length=32)
-    email: str | None = Field(default=None, max_length=256)
-    doc_kind: DocKind | None = None
-    doc_number: str | None = Field(default=None, max_length=64)

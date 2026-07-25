@@ -1,9 +1,11 @@
-"""Auto-cancel pending bookings older than N hours (unless postpay=true).
+"""Auto-cancel pending bookings older than the hold cutoff.
+
+TBB-24: неоплаченных броней быть не должно; hold номера — только на
+время процесса бронирования (клиент нажал «забронировать», идёт
+оплачивать). По истечении cutoff — статус cancelled + availability free.
 
 Background task launched via FastAPI lifespan. Runs the sweep every
-`INTERVAL_SEC` seconds. Each sweep:
-  - SELECT pending+!postpay bookings older than 24h;
-  - for each: free availability rows + status=cancelled + SSE refresh.
+`INTERVAL_SEC` seconds.
 """
 from __future__ import annotations
 
@@ -26,8 +28,8 @@ from app.models.models import (
 
 log = logging.getLogger("autocancel")
 
-INTERVAL_SEC = 900  # 15 min
-EXPIRE_AFTER = timedelta(hours=24)
+INTERVAL_SEC = 60  # 1 min
+EXPIRE_AFTER = timedelta(minutes=15)
 
 
 async def _cancel_one(db: AsyncSession, booking: Booking) -> int:
@@ -75,7 +77,6 @@ async def run_sweep() -> int:
                 select(Booking)
                 .where(
                     Booking.status == BookingStatus.pending,
-                    Booking.postpay.is_(False),
                     Booking.created_at < cutoff,
                 )
                 .with_for_update(skip_locked=True)

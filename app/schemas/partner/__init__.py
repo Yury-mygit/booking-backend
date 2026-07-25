@@ -9,11 +9,7 @@ from app.schemas.partner.availability import (
     AvailabilityRowIn,
     AvailabilityRowOut,
 )
-from app.schemas.partner.bookings import (
-    PartnerBookingPostpaySet,
-    PartnerBookingView,
-    WalkinBookingCreate,
-)
+from app.schemas.partner.bookings import PartnerBookingView
 from app.schemas.partner.clients import (
     ClientLookup,
     ClientPartnerView,
@@ -72,7 +68,6 @@ __all__ = [
     "HotelStats",
     "HotelUpdate",
     "OwnerAccess",
-    "PartnerBookingPostpaySet",
     "PartnerBookingView",
     "RoleAssignment",
     "RoleCreate",
@@ -94,5 +89,4 @@ __all__ = [
     "StaffUpdate",
     "StaffView",
     "TriStatePerms",
-    "WalkinBookingCreate",
 ]

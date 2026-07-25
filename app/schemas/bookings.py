@@ -76,7 +76,6 @@ class BookingResponse(BaseModel):
     child_ages: list[int] | None
     total_kgs: int
     status: BookingStatus
-    postpay: bool
     confirmed: bool
     created_at: datetime
 

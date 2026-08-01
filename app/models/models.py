@@ -63,6 +63,9 @@ class HotelAmenity(str, enum.Enum):
     elevator = "elevator"
     press = "press"
     express_checkin = "express_checkin"
+    wifi = "wifi"
+    parking = "parking"
+    heating = "heating"
     # dining
     bar = "bar"
     free_tea_coffee = "free_tea_coffee"
@@ -79,6 +82,8 @@ class RoomAmenity(str, enum.Enum):
     bathrobe = "bathrobe"
     safe = "safe"
     toiletries = "toiletries"
+    wifi = "wifi"
+    heating = "heating"
     # services (paid flag allowed)
     ironing_supplies = "ironing_supplies"
     ironing_service = "ironing_service"

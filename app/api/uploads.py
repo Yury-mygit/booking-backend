@@ -24,6 +24,7 @@ from app.core.database import get_db
 from app.core.deps import AuthContext, require_verified_partner
 from app.core.exceptions import APIError
 from app.services import scope
+from app.services.hotel_events import publish_hotel_change
 from app.services.media_client import to_public_url, upload_to_media
 from app.services.photo_format import normalize_input, to_response_urls
 
@@ -82,6 +83,7 @@ async def upload_photo(
     h.photos = photos
     await db.commit()
     await db.refresh(h)
+    await publish_hotel_change(hotel_id)
     return {"url": to_public_url(asset_id), "photos": to_response_urls(h.photos)}
 
 
@@ -104,6 +106,7 @@ async def delete_photo(
     photos.pop(idx)
     h.photos = photos
     await db.commit()
+    await publish_hotel_change(hotel_id)
     # Физически файл чистит media GC через `/api/v1/media-refs`.
     return None
 
@@ -127,6 +130,7 @@ async def reorder_photos(
     h.photos = input_norm
     await db.commit()
     await db.refresh(h)
+    await publish_hotel_change(hotel_id)
     return {"photos": to_response_urls(h.photos)}
 
 
@@ -148,6 +152,7 @@ async def upload_room_photo(
     r.photos = photos
     await db.commit()
     await db.refresh(r)
+    await publish_hotel_change(r.hotel_id)
     return {"url": to_public_url(asset_id), "photos": to_response_urls(r.photos)}
 
 
@@ -170,6 +175,7 @@ async def delete_room_photo(
     photos.pop(idx)
     r.photos = photos
     await db.commit()
+    await publish_hotel_change(r.hotel_id)
     return None
 
 
@@ -188,6 +194,7 @@ async def reorder_room_photos(
     r.photos = input_norm
     await db.commit()
     await db.refresh(r)
+    await publish_hotel_change(r.hotel_id)
     return {"photos": to_response_urls(r.photos)}
 
 

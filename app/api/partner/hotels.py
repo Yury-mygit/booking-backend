@@ -14,6 +14,7 @@ from app.core.deps import AuthContext, require_verified_partner
 from app.core.exceptions import APIError
 from app.core.audit import audit
 from app.services import scope
+from app.services.hotel_events import publish_hotel_change
 from app.services.hotel_share import share_hotel_to_self
 from app.models.models import (
     Booking,
@@ -310,6 +311,7 @@ async def update_hotel(
         h.published_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(h)
+    await publish_hotel_change(h.id)
     if becomes_published:
         action = "hotel.publish"
     elif "status" in data and data["status"] != HotelStatus.published:
@@ -359,6 +361,7 @@ async def delete_hotel(
     hotel_id_snap = h.id
     await db.delete(h)
     await db.commit()
+    await publish_hotel_change(hotel_id_snap)
     await audit(
         db, ctx,
         owner_user_id=owner_id_snap,

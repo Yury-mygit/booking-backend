@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.core.deps import AuthContext, require_verified_partner
 from app.core.audit import audit
 from app.services import scope
+from app.services.hotel_events import publish_hotel_change
 from app.models.models import (
     Hotel,
     HotelService,
@@ -54,6 +55,7 @@ async def create_service(
     db.add(s)
     await db.commit()
     await db.refresh(s)
+    await publish_hotel_change(hotel_id)
     await audit(
         db, ctx,
         owner_user_id=h.owner_user_id,
@@ -83,6 +85,7 @@ async def update_service(
     ).scalar_one()
     await db.commit()
     await db.refresh(s)
+    await publish_hotel_change(hotel_id)
     await audit(
         db, ctx,
         owner_user_id=hotel_owner_id,
@@ -110,6 +113,7 @@ async def delete_service(
     sid_snap = s.id
     await db.delete(s)
     await db.commit()
+    await publish_hotel_change(hotel_id)
     await audit(
         db, ctx,
         owner_user_id=hotel_owner_id,

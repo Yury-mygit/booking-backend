@@ -16,6 +16,7 @@ from app.core.deps import AuthContext, require_verified_partner
 from app.core.exceptions import APIError
 from app.core.audit import audit
 from app.services import scope
+from app.services.hotel_events import publish_hotel_change
 from app.models.models import (
     Availability,
     AvailabilityStatus,
@@ -74,6 +75,7 @@ async def create_room(
     db.add(r)
     await db.commit()
     await db.refresh(r)
+    await publish_hotel_change(hotel_id)
     await audit(
         db, ctx,
         owner_user_id=h.owner_user_id,
@@ -137,6 +139,7 @@ async def update_room(
     ).scalar_one()
     await db.commit()
     await db.refresh(r)
+    await publish_hotel_change(hotel_id)
     await audit(
         db, ctx,
         owner_user_id=hotel_owner_id,
@@ -166,6 +169,7 @@ async def delete_room(
     room_id_snap = r.id
     await db.delete(r)
     await db.commit()
+    await publish_hotel_change(hotel_id)
     await audit(
         db, ctx,
         owner_user_id=hotel_owner_id,
@@ -202,6 +206,7 @@ async def set_room_status(
     r.status = payload.status
     await db.commit()
     await db.refresh(r)
+    await publish_hotel_change(r.hotel_id)
     await audit(
         db, ctx,
         owner_user_id=hotel_owner_id,

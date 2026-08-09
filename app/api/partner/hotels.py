@@ -87,7 +87,6 @@ async def create_hotel(
         address=payload.address,
         lat=payload.lat,
         lng=payload.lng,
-        photos=payload.photos,
         meals=payload.meals,
         amenities=serialize_hotel_amenities(payload.amenities),
         checkin_time=payload.checkin_time,

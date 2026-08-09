@@ -8,6 +8,9 @@ from app.services.photo_format import to_response_url, to_response_urls
 
 
 class RoomCreate(BaseModel):
+    # TBB-48: photos ИСКЛЮЧЕНЫ из create/update payload — source of truth
+    # = отдельные `/p/rooms/{id}/photos*` endpoints. Frontend может слать
+    # поле — Pydantic его игнорирует (extra="ignore" по умолчанию).
     name_ru: str = Field(min_length=1, max_length=256)
     name_ky: str | None = None
     name_en: str | None = None
@@ -19,7 +22,6 @@ class RoomCreate(BaseModel):
     floor: int | None = None
     single_beds: int = Field(default=0, ge=0)
     double_beds: int = Field(default=0, ge=0)
-    photos: list[str] = Field(default_factory=list)
     amenities: list[RoomAmenityItem] = Field(default_factory=list)
 
 
@@ -35,7 +37,6 @@ class RoomUpdate(BaseModel):
     floor: int | None = None
     single_beds: int | None = Field(default=None, ge=0)
     double_beds: int | None = Field(default=None, ge=0)
-    photos: list[str] | None = None
     amenities: list[RoomAmenityItem] | None = None
 
 

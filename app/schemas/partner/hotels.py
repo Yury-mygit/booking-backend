@@ -7,6 +7,11 @@ from app.services.photo_format import to_response_urls
 
 
 class HotelCreate(BaseModel):
+    # TBB-46 wave / TBB-48: photos ИСКЛЮЧЕНЫ из create/update payload —
+    # source of truth = отдельные `POST/DELETE/PUT /p/hotels/{id}/photos*`
+    # endpoints, где сохраняется чистый asset_id. Если frontend случайно
+    # передаст поле photos — Pydantic его игнорирует (extra="ignore" по
+    # умолчанию), сохранение в БД не произойдёт.
     name_ru: str = Field(min_length=1, max_length=256)
     name_ky: str | None = None
     name_en: str | None = None
@@ -17,7 +22,6 @@ class HotelCreate(BaseModel):
     address: str | None = None
     lat: float | None = None
     lng: float | None = None
-    photos: list[str] = Field(default_factory=list)
     meals: MealsKind = MealsKind.none
     amenities: list[HotelAmenity] = Field(default_factory=list)
     checkin_time: time | None = None
@@ -35,7 +39,6 @@ class HotelUpdate(BaseModel):
     address: str | None = None
     lat: float | None = None
     lng: float | None = None
-    photos: list[str] | None = None
     status: HotelStatus | None = None
     meals: MealsKind | None = None
     amenities: list[HotelAmenity] | None = None

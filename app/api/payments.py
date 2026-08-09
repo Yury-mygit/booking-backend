@@ -54,6 +54,7 @@ class WebhookRequest(BaseModel):
     status: str
     amount_kgs: int | None = None
     provider_ref: str | None = None
+    reason: str | None = None
 
 
 class WebhookAck(BaseModel):
@@ -116,19 +117,32 @@ async def devpay_webhook(
         raise APIError(404, "not_found", f"payment for intent {body.intent_id} not found")
     payment, booking, room = row
 
-    if payment.status == PaymentStatus.paid:
-        return WebhookAck(ok=True, status="already_paid")
+    if payment.status in (PaymentStatus.paid, PaymentStatus.failed, PaymentStatus.cancelled):
+        return WebhookAck(ok=True, status=f"already_{payment.status.value}")
 
-    if body.status != "paid":
-        # Slice 3 разберёт declined/cancelled — пока молча ack без мутации.
-        return WebhookAck(ok=True, status=f"ignored:{body.status}")
-
-    payment.status = PaymentStatus.paid
-    payment.paid_at = datetime.now(timezone.utc)
-    if booking.status == BookingStatus.pending:
-        booking.status = BookingStatus.paid
-        booking.confirmed = True
     hotel_id_for_pub = room.hotel_id
-    await db.commit()
-    await pubsub.publish_refresh(hotel_id_for_pub)
-    return WebhookAck(ok=True, status="paid")
+    if body.status == "paid":
+        payment.status = PaymentStatus.paid
+        payment.paid_at = datetime.now(timezone.utc)
+        if booking.status == BookingStatus.pending:
+            booking.status = BookingStatus.paid
+            booking.confirmed = True
+        await db.commit()
+        await pubsub.publish_refresh(hotel_id_for_pub)
+        return WebhookAck(ok=True, status="paid")
+
+    if body.status == "declined":
+        payment.status = PaymentStatus.failed
+        # Booking остаётся pending — клиент может повторить попытку.
+        await db.commit()
+        await pubsub.publish_refresh(hotel_id_for_pub)
+        return WebhookAck(ok=True, status="declined")
+
+    if body.status == "cancelled":
+        payment.status = PaymentStatus.cancelled
+        # Booking остаётся pending.
+        await db.commit()
+        await pubsub.publish_refresh(hotel_id_for_pub)
+        return WebhookAck(ok=True, status="cancelled")
+
+    raise APIError(400, "bad_status", f"Unknown webhook status: {body.status}")

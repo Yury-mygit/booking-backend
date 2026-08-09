@@ -134,6 +134,7 @@ class PaymentStatus(str, enum.Enum):
     paid = "paid"
     failed = "failed"
     refunded = "refunded"
+    cancelled = "cancelled"
 
 
 class DocKind(str, enum.Enum):

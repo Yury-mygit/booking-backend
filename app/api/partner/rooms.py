@@ -213,7 +213,7 @@ async def set_room_status(
         action="room.status_update",
         subject_type="room",
         subject_id=r.id,
-        hotel_id=hotel_id,
+        hotel_id=r.hotel_id,
         payload={"hotel_id": r.hotel_id, "from": prev.value, "to": payload.status.value},
     )
     return RoomPartnerView.from_model(r)

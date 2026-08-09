@@ -1,31 +1,30 @@
-"""Client-side платежи через DevPay (mock PSP).
+"""Client-side платежи через DevPay (mock PSP) — DP-3/4/5.
 
 Endpoints:
 - `POST /c/bookings/{code}/pay/init` — создаёт Payment(pending) через
   DevPay intents API, возвращает methods (devpay checkout_url + optional
   QR partner'а).
-- `POST /c/payments/webhook/devpay` — принимает webhook от DevPay, апдейтит
-  Payment+Booking → paid, публикует SSE. Slice 4 добавит HMAC-подпись
-  + Idempotency-Key.
-
-Booking имеет два независимых дименшна: `confirmed` (партнёр подтвердил)
-и `paid` (клиент оплатил). Для постоплатных броней (walk-in) — paid
-выставляется через `/p/bookings/{code}/mark-paid`.
+- `POST /c/payments/webhook/devpay` — принимает webhook от DevPay c
+  HMAC-подписью + Idempotency-Key (DP-5). Апдейтит Payment+Booking,
+  публикует SSE, кеширует response по Idempotency-Key.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import pubsub
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import AuthContext, require_role
 from app.core.exceptions import APIError
 from app.core.payments import provider as payment_provider
+from app.core.webhook_security import verify_signature, verify_timestamp
 from app.models.models import (
     Booking,
     BookingStatus,
@@ -34,10 +33,15 @@ from app.models.models import (
     PaymentStatus,
     Room,
     UserRole,
+    WebhookIdempotency,
 )
 
 
 router = APIRouter(prefix="/c", tags=["payments"])
+
+
+IDEMPOTENCY_TTL = timedelta(days=7)
+DEVPAY_ENDPOINT = "devpay_webhook"
 
 
 class PayInitResponse(BaseModel):
@@ -47,19 +51,6 @@ class PayInitResponse(BaseModel):
     methods: list[dict]
     booking_code: str
     booking_status: BookingStatus
-
-
-class WebhookRequest(BaseModel):
-    intent_id: str
-    status: str
-    amount_kgs: int | None = None
-    provider_ref: str | None = None
-    reason: str | None = None
-
-
-class WebhookAck(BaseModel):
-    ok: bool
-    status: str
 
 
 async def _get_my_booking(db: AsyncSession, ctx: AuthContext, code: str) -> Booking:
@@ -97,52 +88,108 @@ async def pay_init(
     )
 
 
-@router.post("/payments/webhook/devpay", response_model=WebhookAck)
+async def _cached_response(
+    db: AsyncSession, key: str
+) -> dict | None:
+    row = (
+        await db.execute(
+            select(WebhookIdempotency).where(WebhookIdempotency.key == key)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    if row.expires_at < datetime.now(timezone.utc):
+        return None
+    return row.response_body
+
+
+async def _store_cache(
+    db: AsyncSession, key: str, response_body: dict
+) -> None:
+    now = datetime.now(timezone.utc)
+    db.add(
+        WebhookIdempotency(
+            key=key,
+            endpoint=DEVPAY_ENDPOINT,
+            response_body=response_body,
+            http_status=200,
+            created_at=now,
+            expires_at=now + IDEMPOTENCY_TTL,
+        )
+    )
+
+
+@router.post("/payments/webhook/devpay")
 async def devpay_webhook(
-    body: WebhookRequest,
+    request: Request,
+    x_devpay_signature: str | None = Header(default=None),
+    x_devpay_timestamp: str | None = Header(default=None),
+    x_devpay_idempotency_key: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
-) -> WebhookAck:
-    """Webhook от DevPay. Slice 2 — без auth (доверяем docker-network).
-    Slice 4 добавит HMAC-подпись + Idempotency-Key.
-    """
+) -> dict:
+    raw = await request.body()
+
+    # Security
+    if not verify_signature(raw, x_devpay_signature, settings.devpay_merchant_secret):
+        raise APIError(401, "bad_signature", "Invalid HMAC signature")
+    if not verify_timestamp(x_devpay_timestamp):
+        raise APIError(401, "stale_timestamp", "Timestamp out of range")
+    if not x_devpay_idempotency_key:
+        raise APIError(400, "missing_idempotency_key", "X-Devpay-Idempotency-Key required")
+
+    # Idempotency cache
+    key = f"{DEVPAY_ENDPOINT}:{x_devpay_idempotency_key}"
+    cached = await _cached_response(db, key)
+    if cached is not None:
+        return cached
+
+    try:
+        body = json.loads(raw.decode())
+    except Exception:
+        raise APIError(400, "bad_json", "Invalid JSON body")
+
+    intent_id = body.get("intent_id")
+    status_str = body.get("status")
+    reason = body.get("reason")
+    if not intent_id or not status_str:
+        raise APIError(400, "bad_payload", "intent_id + status required")
+
     row = (
         await db.execute(
             select(Payment, Booking, Room)
             .join(Booking, Booking.id == Payment.booking_id)
             .join(Room, Room.id == Booking.room_id)
-            .where(Payment.provider_ref == body.intent_id)
+            .where(Payment.provider_ref == intent_id)
         )
     ).first()
     if row is None:
-        raise APIError(404, "not_found", f"payment for intent {body.intent_id} not found")
+        raise APIError(404, "not_found", f"payment for intent {intent_id} not found")
     payment, booking, room = row
 
     if payment.status in (PaymentStatus.paid, PaymentStatus.failed, PaymentStatus.cancelled):
-        return WebhookAck(ok=True, status=f"already_{payment.status.value}")
+        response = {"ok": True, "status": f"already_{payment.status.value}"}
+        await _store_cache(db, key, response)
+        await db.commit()
+        return response
 
     hotel_id_for_pub = room.hotel_id
-    if body.status == "paid":
+    if status_str == "paid":
         payment.status = PaymentStatus.paid
         payment.paid_at = datetime.now(timezone.utc)
         if booking.status == BookingStatus.pending:
             booking.status = BookingStatus.paid
             booking.confirmed = True
-        await db.commit()
-        await pubsub.publish_refresh(hotel_id_for_pub)
-        return WebhookAck(ok=True, status="paid")
-
-    if body.status == "declined":
+        response = {"ok": True, "status": "paid"}
+    elif status_str == "declined":
         payment.status = PaymentStatus.failed
-        # Booking остаётся pending — клиент может повторить попытку.
-        await db.commit()
-        await pubsub.publish_refresh(hotel_id_for_pub)
-        return WebhookAck(ok=True, status="declined")
-
-    if body.status == "cancelled":
+        response = {"ok": True, "status": "declined", "reason": reason}
+    elif status_str == "cancelled":
         payment.status = PaymentStatus.cancelled
-        # Booking остаётся pending.
-        await db.commit()
-        await pubsub.publish_refresh(hotel_id_for_pub)
-        return WebhookAck(ok=True, status="cancelled")
+        response = {"ok": True, "status": "cancelled"}
+    else:
+        raise APIError(400, "bad_status", f"Unknown webhook status: {status_str}")
 
-    raise APIError(400, "bad_status", f"Unknown webhook status: {body.status}")
+    await _store_cache(db, key, response)
+    await db.commit()
+    await pubsub.publish_refresh(hotel_id_for_pub)
+    return response

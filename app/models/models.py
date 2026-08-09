@@ -602,3 +602,18 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class WebhookIdempotency(Base):
+    """DP-5: idempotency-key cache для inbound webhooks (DevPay etc.)."""
+
+    __tablename__ = "webhook_idempotency"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    endpoint: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_body: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    http_status: Mapped[int] = mapped_column(Integer, nullable=False, server_default="200")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

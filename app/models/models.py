@@ -125,7 +125,7 @@ class BookingSource(str, enum.Enum):
 
 
 class PaymentProvider(str, enum.Enum):
-    mock = "mock"
+    devpay = "devpay"
     elqr = "elqr"
 
 

@@ -21,6 +21,9 @@ services:
       - MEDIA_INTERNAL_URL=${MEDIA_INTERNAL_URL:-http://media_dev_app:8000}
       - MEDIA_PUBLIC_BASE=${MEDIA_PUBLIC_BASE:-https://media.dev.raftforge.art}
       - MEDIA_GC_TOKEN=${MEDIA_GC_TOKEN:-}
+      - DEVPAY_INTERNAL_URL=${DEVPAY_INTERNAL_URL:-http://devpay_dev_app:8000}
+      - DEVPAY_PUBLIC_URL=${DEVPAY_PUBLIC_URL:-https://devpay.dev.raftforge.art}
+      - DEVPAY_MERCHANT_SECRET=${DEVPAY_MERCHANT_SECRET:-}
     volumes:
       - booking_storage:/app/storage
     healthcheck:

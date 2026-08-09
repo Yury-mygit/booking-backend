@@ -42,5 +42,12 @@ class Settings(BaseSettings):
     # Токен для эндпоинта /api/v1/media-refs (GC консьюмер). Шлёт media.
     media_gc_token: str = ""
 
+    # DevPay (mock PSP) — Slice 2 (TBB-43 / DP-3). booking → devpay через
+    # server-to-server в shared network; webhook devpay → booking через
+    # публичный URL (Caddy) с /api-префиксом.
+    devpay_internal_url: str = "http://devpay_dev_app:8000"
+    devpay_public_url: str = "https://devpay.dev.raftforge.art"
+    devpay_merchant_secret: str = ""
+
 
 settings = Settings()

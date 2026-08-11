@@ -44,8 +44,9 @@ def verify_init_data(init_data: str) -> dict:
     age = int(time.time()) - auth_date
     if age > settings.tg_init_data_max_age_sec:
         raise InitDataError("init_data expired")
-    if age < -60:
-        raise InitDataError("auth_date in the future")
+    # No future-time check: TG spec требует только max-age (anti-replay);
+    # проверка auth_date > now security-neutral, но ломает auth при любом
+    # serverside clock drift назад. См. TBB-50 (2026-08-11).
 
     user_raw = pairs.get("user")
     if not user_raw:

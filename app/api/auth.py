@@ -9,6 +9,7 @@
 - POST /auth/dev-login — bypass для локальной отладки, доступен только
   при `settings.dev_mode=True`; на проде 404 (см. Caddyfile `book.dev`).
 """
+import asyncio
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -25,6 +26,7 @@ from app.core.tg_auth import InitDataError, verify_init_data
 from app.models.models import Lang, PartnerProfile, PartnerStaff, Session, User, UserRole
 from app.schemas.auth import AuthTgRequest, AuthTgResponse, AuthTgUser
 from app.schemas.partner import OwnerAccess, StaffPerms
+from app.services.client_avatar import refresh_client_avatar_from_tg
 from app.utils import get_or_create_client_for_user
 
 
@@ -137,7 +139,13 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
 
     # Auto-create a client profile for any TG user. Walk-in (no telegram_id)
     # rows live alongside in the same table; this one is the TG-linked profile.
-    await get_or_create_client_for_user(db, user)
+    client = await get_or_create_client_for_user(db, user)
+
+    # TBB-53: TG avatar sync. photo_url приходит от initData (Bot API 6.0+,
+    # публичное фото). Сравниваем с последним consumed URL — если разошлись,
+    # запускаем fire-and-forget download → upload_to_media → save asset_id.
+    new_photo_source = tg_user.get("photo_url")
+    avatar_stale = bool(new_photo_source) and client.photo_url_source != new_photo_source
 
     pp = (
         await db.execute(select(PartnerProfile).where(PartnerProfile.user_id == user.id))
@@ -153,8 +161,14 @@ async def auth_tg(payload: AuthTgRequest, db: AsyncSession = Depends(get_db)) ->
     db.add(session)
     available_roles = await compute_available_roles(db, user)
     accessible_owners = await _owners_response(db, user)
+    client_id_for_avatar = client.id
     await db.commit()
     await db.refresh(user)
+
+    if avatar_stale:
+        asyncio.create_task(
+            refresh_client_avatar_from_tg(client_id_for_avatar, new_photo_source, user.id)
+        )
 
     return AuthTgResponse(
         token=token,

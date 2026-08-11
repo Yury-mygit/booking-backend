@@ -219,6 +219,9 @@ class Client(Base):
     doc_kind: Mapped[DocKind | None] = mapped_column(ENUM(DocKind, name="doc_kind"))
     doc_number: Mapped[str | None] = mapped_column(String(64))
     photo_url: Mapped[str | None] = mapped_column(String(512))
+    # Last TG CDN URL (initData.user.photo_url) we consumed to populate
+    # photo_url. Compared on each auth to detect avatar changes.
+    photo_url_source: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

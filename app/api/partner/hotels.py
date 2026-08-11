@@ -78,11 +78,7 @@ async def create_hotel(
         owner_user_id=ctx.user.id,
         slug="__pending__",  # placeholder; replaced after flush() gives id
         name_ru=payload.name_ru,
-        name_ky=payload.name_ky,
-        name_en=payload.name_en,
         description_ru=payload.description_ru,
-        description_ky=payload.description_ky,
-        description_en=payload.description_en,
         city=payload.city,
         address=payload.address,
         lat=payload.lat,
@@ -94,7 +90,7 @@ async def create_hotel(
     )
     db.add(h)
     await db.flush()  # need h.id for slug fallback
-    h.slug = await gen_unique_hotel_slug(db, payload.name_en, h.id, exclude_id=h.id)
+    h.slug = await gen_unique_hotel_slug(db, payload.name_ru, h.id, exclude_id=h.id)
     await db.commit()
     await db.refresh(h)
     await audit(
@@ -148,10 +144,7 @@ def _build_checklist(h: Hotel, rooms: list[Room]) -> list[ChecklistItem]:
     photo_count = len(h.photos or [])
     no_price_rooms = [r for r in rooms if not r.price_kgs or r.price_kgs <= 0]
     no_photo_rooms = [r for r in rooms if not (r.photos or [])]
-    has_desc = any(
-        (d or "").strip().__len__() >= 20
-        for d in (h.description_ru, h.description_ky, h.description_en)
-    )
+    has_desc = (h.description_ru or "").strip().__len__() >= 20
 
     out: list[ChecklistItem] = []
     out.append(ChecklistItem(
@@ -198,12 +191,6 @@ def _build_checklist(h: Hotel, rooms: list[Room]) -> list[ChecklistItem]:
         ok=h.lat is not None and h.lng is not None,
         key="status.check.coords",
         action=None if (h.lat is not None and h.lng is not None) else ChecklistAction(tab="description"),
-    ))
-    out.append(ChecklistItem(
-        kind="recommended",
-        ok=bool(h.name_ky and h.name_en),
-        key="status.check.name_translations",
-        action=None if (h.name_ky and h.name_en) else ChecklistAction(tab="description"),
     ))
     if rooms:
         if no_photo_rooms:
@@ -295,7 +282,7 @@ async def update_hotel(
     data = payload.model_dump(exclude_unset=True)
     if "amenities" in data and data["amenities"] is not None:
         data["amenities"] = serialize_hotel_amenities(payload.amenities)
-    name_en_changed = "name_en" in data and data["name_en"] != h.name_en
+    name_ru_changed = "name_ru" in data and data["name_ru"] != h.name_ru
     new_status = data.get("status")
     becomes_published = (
         "status" in data
@@ -304,8 +291,8 @@ async def update_hotel(
     )
     for field, value in data.items():
         setattr(h, field, value)
-    if name_en_changed:
-        h.slug = await gen_unique_hotel_slug(db, h.name_en, h.id, exclude_id=h.id)
+    if name_ru_changed:
+        h.slug = await gen_unique_hotel_slug(db, h.name_ru, h.id, exclude_id=h.id)
     if becomes_published:
         h.published_at = datetime.now(timezone.utc)
     await db.commit()

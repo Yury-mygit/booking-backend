@@ -42,9 +42,8 @@ async def main() -> None:
         if hotel is None:
             hotel = Hotel(
                 owner_user_id=partner.id,
+                slug="__pending__",
                 name_ru="Демо-отель",
-                name_ky="Демо-мейманкана",
-                name_en="Demo Hotel",
                 description_ru="Тестовый отель для smoke",
                 city="Bishkek",
                 address="ул. Чуй 1",
@@ -61,7 +60,6 @@ async def main() -> None:
                     Room(
                         hotel_id=hotel.id,
                         name_ru="Стандарт",
-                        name_en="Standard",
                         capacity=2,
                         price_kgs=2500,
                         photos=[],
@@ -69,7 +67,6 @@ async def main() -> None:
                     Room(
                         hotel_id=hotel.id,
                         name_ru="Люкс",
-                        name_en="Suite",
                         capacity=4,
                         price_kgs=5500,
                         photos=[],

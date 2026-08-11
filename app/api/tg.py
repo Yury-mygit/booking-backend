@@ -22,28 +22,15 @@ from app.models.models import Hotel
 router = APIRouter(prefix="/tg", tags=["telegram-webhook"])
 
 
-_BUTTON_LABEL = {"ru": "Начать", "ky": "Баштоо", "en": "Start"}
-_PROMPT = {
-    "ru": "Нажмите кнопку, чтобы открыть приложение:",
-    "ky": "Колдонмону ачуу үчүн баскычты басыңыз:",
-    "en": "Tap the button to open the app:",
-}
-_HOTEL_PROMPT = {
-    "ru": "Бронирование отеля\n{hotel}",
-    "ky": "Мейманкананы брондоо\n{hotel}",
-    "en": "Hotel booking\n{hotel}",
-}
+_BUTTON_LABEL = "Начать"
+_PROMPT = "Нажмите кнопку, чтобы открыть приложение:"
+_HOTEL_PROMPT = "Бронирование отеля\n{hotel}"
 
 # hotel_<slug> либо hotel_<slug>_<ci>_<co>_<adults>[_<children>[_<infants>]]
 # (исторически было `_<guests>` — одно число; после #125 — 1-3 числа)
 _HOTEL_SP_RE = re.compile(
     r"^hotel_(.+?)(?:_\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}(?:_\d+)+)?$"
 )
-
-
-def _pick_lang(message: dict) -> str:
-    code = ((message.get("from") or {}).get("language_code") or "").split("-")[0].lower()
-    return code if code in ("ru", "ky", "en") else "ru"
 
 
 def _app_url(start_param: str) -> str:
@@ -54,17 +41,7 @@ def _app_url(start_param: str) -> str:
     return base
 
 
-def _hotel_name_by_slug(hotel: Hotel | None, lang: str) -> str | None:
-    if hotel is None:
-        return None
-    if lang == "ky" and hotel.name_ky:
-        return hotel.name_ky
-    if lang == "en" and hotel.name_en:
-        return hotel.name_en
-    return hotel.name_ru
-
-
-async def _build_prompt(db: AsyncSession, start_param: str, lang: str) -> str:
+async def _build_prompt(db: AsyncSession, start_param: str) -> str:
     """hotel_<slug>[...] → «Бронирование отеля\\n<имя>». Иначе — стандартный."""
     if start_param:
         m = _HOTEL_SP_RE.match(start_param)
@@ -73,10 +50,9 @@ async def _build_prompt(db: AsyncSession, start_param: str, lang: str) -> str:
             hotel = (
                 await db.execute(select(Hotel).where(Hotel.slug == slug))
             ).scalar_one_or_none()
-            name = _hotel_name_by_slug(hotel, lang)
-            if name:
-                return _HOTEL_PROMPT[lang].format(hotel=name)
-    return _PROMPT[lang]
+            if hotel is not None:
+                return _HOTEL_PROMPT.format(hotel=hotel.name_ru)
+    return _PROMPT
 
 
 @router.post("/bot")
@@ -102,7 +78,6 @@ async def tg_webhook(
         return {"ok": True}
 
     chat_id = msg.get("chat", {}).get("id")
-    lang = _pick_lang(msg)
 
     # Любой инпут (включая /start и свободный текст) — отвечаем кнопкой «Начать».
     start_param = ""
@@ -110,14 +85,14 @@ async def tg_webhook(
         parts = text.split(maxsplit=1)
         start_param = parts[1].strip() if len(parts) > 1 else ""
 
-    prompt_text = await _build_prompt(db, start_param, lang)
+    prompt_text = await _build_prompt(db, start_param)
 
     payload = {
         "chat_id": chat_id,
         "text": prompt_text,
         "reply_markup": {
             "inline_keyboard": [
-                [{"text": _BUTTON_LABEL[lang], "web_app": {"url": _app_url(start_param)}}],
+                [{"text": _BUTTON_LABEL, "web_app": {"url": _app_url(start_param)}}],
             ],
         },
     }

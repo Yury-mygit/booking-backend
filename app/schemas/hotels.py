@@ -50,11 +50,7 @@ class HotelListItem(BaseModel):
     id: int
     slug: str
     name_ru: str
-    name_ky: str | None
-    name_en: str | None
     description_ru: str | None
-    description_ky: str | None
-    description_en: str | None
     city: str
     address: str | None
     photos: list[str]
@@ -69,11 +65,7 @@ class HotelListItem(BaseModel):
 class RoomCard(BaseModel):
     id: int
     name_ru: str
-    name_ky: str | None
-    name_en: str | None
     description_ru: str | None
-    description_ky: str | None
-    description_en: str | None
     capacity: int
     price_kgs: int
     floor: int | None
@@ -92,8 +84,6 @@ class RoomCard(BaseModel):
 class ServicePublicView(BaseModel):
     id: int
     name_ru: str
-    name_ky: str | None
-    name_en: str | None
     price_kgs: int | None
 
 
@@ -101,11 +91,7 @@ class HotelDetails(BaseModel):
     id: int
     slug: str
     name_ru: str
-    name_ky: str | None
-    name_en: str | None
     description_ru: str | None
-    description_ky: str | None
-    description_en: str | None
     city: str
     address: str | None
     lat: float | None

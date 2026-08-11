@@ -239,11 +239,7 @@ class Hotel(Base):
         ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False
     )
     name_ru: Mapped[str] = mapped_column(String(256), nullable=False)
-    name_ky: Mapped[str | None] = mapped_column(String(256))
-    name_en: Mapped[str | None] = mapped_column(String(256))
     description_ru: Mapped[str | None] = mapped_column(Text)
-    description_ky: Mapped[str | None] = mapped_column(Text)
-    description_en: Mapped[str | None] = mapped_column(Text)
     city: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     address: Mapped[str | None] = mapped_column(String(512))
     lat: Mapped[float | None] = mapped_column(Numeric(9, 6))
@@ -286,11 +282,7 @@ class Room(Base):
         ForeignKey("hotels.id", ondelete="CASCADE"), index=True, nullable=False
     )
     name_ru: Mapped[str] = mapped_column(String(256), nullable=False)
-    name_ky: Mapped[str | None] = mapped_column(String(256))
-    name_en: Mapped[str | None] = mapped_column(String(256))
     description_ru: Mapped[str | None] = mapped_column(Text)
-    description_ky: Mapped[str | None] = mapped_column(Text)
-    description_en: Mapped[str | None] = mapped_column(Text)
     capacity: Mapped[int] = mapped_column(Integer, nullable=False)
     price_kgs: Mapped[int] = mapped_column(Integer, nullable=False)
     floor: Mapped[int | None] = mapped_column(Integer)
@@ -326,8 +318,6 @@ class HotelService(Base):
         ForeignKey("hotels.id", ondelete="CASCADE"), index=True, nullable=False
     )
     name_ru: Mapped[str] = mapped_column(String(256), nullable=False)
-    name_ky: Mapped[str | None] = mapped_column(String(256))
-    name_en: Mapped[str | None] = mapped_column(String(256))
     price_kgs: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

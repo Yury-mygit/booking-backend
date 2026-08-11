@@ -55,26 +55,37 @@ def date_range_nights(check_in: date, check_out: date) -> Iterator[date]:
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
+_CYR_TO_LAT = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d",
+    "е": "e", "ё": "yo", "ж": "zh", "з": "z", "и": "i",
+    "й": "y", "к": "k", "л": "l", "м": "m", "н": "n",
+    "о": "o", "п": "p", "р": "r", "с": "s", "т": "t",
+    "у": "u", "ф": "f", "х": "kh", "ц": "ts", "ч": "ch",
+    "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "",
+    "э": "e", "ю": "yu", "я": "ya",
+}
 
-def slugify(s: str | None) -> str:
-    """ASCII-only slug. Cyrillic / non-Latin → empty (caller must fallback)."""
+
+def slugify_ru(s: str | None) -> str:
+    """Slug from Cyrillic (or mixed) input via transliteration to Latin."""
     if not s:
         return ""
     s = s.lower().strip()
+    s = "".join(_CYR_TO_LAT.get(c, c) for c in s)
     s = _SLUG_RE.sub("-", s).strip("-")
     return s[:60]
 
 
 async def gen_unique_hotel_slug(
     db: AsyncSession,
-    name_en: str | None,
+    name_ru: str | None,
     hotel_id: int,
     exclude_id: int | None = None,
 ) -> str:
     """Pick a unique slug for a hotel. Fallback: hotel-{id}."""
     from app.models.models import Hotel  # lazy import to avoid circular
 
-    base = slugify(name_en) or f"hotel-{hotel_id}"
+    base = slugify_ru(name_ru) or f"hotel-{hotel_id}"
     candidate = base
     n = 0
     while True:

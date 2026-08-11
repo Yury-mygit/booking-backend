@@ -36,7 +36,7 @@ from app.models.models import (
     PartnerStaffRole,
     User,
 )
-from app.services.tg_bot import hotel_name_by_lang, send_button_message
+from app.services.tg_bot import send_button_message
 
 _DEDUP_TTL_SEC = 30
 _DEDUP_MAX_ENTRIES = 4096
@@ -57,18 +57,9 @@ def _should_skip(recipient_user_id: int, thread_id: int) -> bool:
     return False
 
 
-# Локализация. Lang — User.lang получателя.
-_TPL_TO_CLIENT = {
-    "ru": "💬 {hotel}\n{preview}",
-    "ky": "💬 {hotel}\n{preview}",
-    "en": "💬 {hotel}\n{preview}",
-}
-_TPL_TO_HOTEL = {
-    "ru": "💬 Сообщение от {client}\n{preview}",
-    "ky": "💬 {client} жазды\n{preview}",
-    "en": "💬 Message from {client}\n{preview}",
-}
-_BTN = {"ru": "Открыть чат", "ky": "Чатты ачуу", "en": "Open chat"}
+_TPL_TO_CLIENT = "💬 {hotel}\n{preview}"
+_TPL_TO_HOTEL = "💬 Сообщение от {client}\n{preview}"
+_BTN = "Открыть чат"
 
 
 def _preview(body: str) -> str:
@@ -82,11 +73,6 @@ def _client_name(user: User) -> str:
     if name and last:
         return f"{name} {last[0]}."
     return name or last or "клиент"
-
-
-def _lang_str(user_lang) -> str:
-    s = user_lang.value if hasattr(user_lang, "value") else str(user_lang)
-    return s if s in ("ru", "ky", "en") else "ru"
 
 
 def _deep_link(start_param: str) -> str:
@@ -112,9 +98,8 @@ async def _notify_one(
 ) -> None:
     if _should_skip(recipient.id, thread_id):
         return
-    lang = _lang_str(recipient.lang)
     status = await send_button_message(
-        recipient.telegram_id, text, _deep_link(start_param), _BTN[lang]
+        recipient.telegram_id, text, _deep_link(start_param), _BTN
     )
     if status == 200:
         if recipient.bot_blocked_or_unreachable:
@@ -213,8 +198,7 @@ async def notify_chat_message(thread_id: int, msg_id: int) -> None:
                 start_param = f"p_chat_{thread_id}"
                 recipients = await _hotel_recipients(db, hotel)
                 for r in recipients:
-                    lang = _lang_str(r.lang)
-                    text = _TPL_TO_HOTEL[lang].format(client=client_label, preview=preview)
+                    text = _TPL_TO_HOTEL.format(client=client_label, preview=preview)
                     await _notify_one(db, r, text, start_param, thread_id)
             else:
                 # → шлём клиенту
@@ -225,10 +209,7 @@ async def notify_chat_message(thread_id: int, msg_id: int) -> None:
                 ).scalar_one_or_none()
                 if client_user is None:
                     return
-                lang = _lang_str(client_user.lang)
-                text = _TPL_TO_CLIENT[lang].format(
-                    hotel=hotel_name_by_lang(hotel, lang), preview=preview
-                )
+                text = _TPL_TO_CLIENT.format(hotel=hotel.name_ru, preview=preview)
                 start_param = f"chat_{thread_id}"
                 await _notify_one(db, client_user, text, start_param, thread_id)
     except Exception as e:

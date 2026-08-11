@@ -9,23 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.models import Hotel, User
-from app.services.tg_bot import hotel_name_by_lang, send_button_message
+from app.services.tg_bot import send_button_message
 
 
 ShareOutcome = str  # "ok" | "bot_not_started" | "upstream_error" | "not_configured"
 
 
-_TPL_SHARE_HOTEL = {
-    "ru": "Отель «{hotel}»",
-    "ky": "Мейманкана «{hotel}»",
-    "en": "Hotel «{hotel}»",
-}
-_BTN_OPEN = {"ru": "Открыть", "ky": "Ачуу", "en": "Open"}
-
-
-def _lang_str(user_lang) -> str:
-    s = user_lang.value if hasattr(user_lang, "value") else str(user_lang)
-    return s if s in ("ru", "ky", "en") else "ru"
+_TPL_SHARE_HOTEL = "Отель «{hotel}»"
+_BTN_OPEN = "Открыть"
 
 
 def _deep_link_hotel(slug: str) -> str:
@@ -60,11 +51,10 @@ async def share_hotel_to_self(
     if user.bot_blocked_or_unreachable:
         return "bot_not_started"
 
-    lang = _lang_str(user.lang)
-    text = _TPL_SHARE_HOTEL[lang].format(hotel=hotel_name_by_lang(hotel, lang))
+    text = _TPL_SHARE_HOTEL.format(hotel=hotel.name_ru)
     deep_link = _deep_link_hotel(hotel.slug)
 
-    status = await send_button_message(user.telegram_id, text, deep_link, _BTN_OPEN[lang])
+    status = await send_button_message(user.telegram_id, text, deep_link, _BTN_OPEN)
 
     if status == 200:
         if user.bot_blocked_or_unreachable:

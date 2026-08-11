@@ -20,7 +20,6 @@ from app.models.models import (
     ChatSubjectType,
     ChatThread,
     Hotel,
-    Lang,
     Room,
     User,
 )
@@ -36,58 +35,30 @@ REASON_CODES = (
     "other",
 )
 
-# Локализация reasons для человекочитаемой строки в системке чата.
-# Язык — по User.lang клиента (decision § Q-reasons-list).
-REASON_LABELS: dict[Lang, dict[str, str]] = {
-    Lang.ru: {
-        "plans_changed": "Планы изменились",
-        "found_better": "Нашёл вариант лучше",
-        "booking_error": "Ошибка при бронировании",
-        "partner_issue": "Проблема с отелем",
-        "other": "Другое",
-    },
-    Lang.ky: {
-        "plans_changed": "План өзгөрдү",
-        "found_better": "Жакшыраак вариант таптым",
-        "booking_error": "Брондоодо ката кетти",
-        "partner_issue": "Мейманкана менен көйгөй",
-        "other": "Башкасы",
-    },
-    Lang.en: {
-        "plans_changed": "Plans changed",
-        "found_better": "Found a better option",
-        "booking_error": "Booking mistake",
-        "partner_issue": "Issue with the hotel",
-        "other": "Other",
-    },
+REASON_LABELS: dict[str, str] = {
+    "plans_changed": "Планы изменились",
+    "found_better": "Нашёл вариант лучше",
+    "booking_error": "Ошибка при бронировании",
+    "partner_issue": "Проблема с отелем",
+    "other": "Другое",
 }
 
-# Заголовок системки (тоже локализованный).
-HEADER: dict[Lang, str] = {
-    Lang.ru: "Запрос на отмену бронирования",
-    Lang.ky: "Брондоону жокко чыгаруу өтүнүчү",
-    Lang.en: "Cancellation request",
-}
-NOTE_PREFIX: dict[Lang, str] = {
-    Lang.ru: "Комментарий",
-    Lang.ky: "Комментарий",
-    Lang.en: "Note",
-}
+HEADER = "Запрос на отмену бронирования"
+NOTE_PREFIX = "Комментарий"
 
 
-def _build_body(lang: Lang, reasons: list[str], note: str | None) -> str:
-    """Формат тела системки: две строки — машиночитаемая CSV + локализованная.
+def _build_body(reasons: list[str], note: str | None) -> str:
+    """Формат тела системки: заголовок + машиночитаемая CSV + человеческая строка.
     Опционально третья строка с note (после разделителя).
     """
-    labels = REASON_LABELS[lang]
-    human = "; ".join(labels[code] for code in reasons)
+    human = "; ".join(REASON_LABELS[code] for code in reasons)
     lines = [
-        HEADER[lang],
+        HEADER,
         f"reasons={','.join(reasons)}",
         human,
     ]
     if note:
-        lines.append(f"{NOTE_PREFIX[lang]}: {note.strip()}")
+        lines.append(f"{NOTE_PREFIX}: {note.strip()}")
     return "\n".join(lines)
 
 
@@ -144,7 +115,7 @@ async def create_cancellation_request(
             detail={"requested_at": prev.created_at.isoformat()},
         )
 
-    body = _build_body(client_user.lang, reasons, note)
+    body = _build_body(reasons, note)
 
     msg = await chat_service.append_message(
         db,

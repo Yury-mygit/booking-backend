@@ -12,11 +12,7 @@ class RoomCreate(BaseModel):
     # = отдельные `/p/rooms/{id}/photos*` endpoints. Frontend может слать
     # поле — Pydantic его игнорирует (extra="ignore" по умолчанию).
     name_ru: str = Field(min_length=1, max_length=256)
-    name_ky: str | None = None
-    name_en: str | None = None
     description_ru: str | None = None
-    description_ky: str | None = None
-    description_en: str | None = None
     capacity: int = Field(ge=1, le=20)
     price_kgs: int = Field(ge=0)
     floor: int | None = None
@@ -27,11 +23,7 @@ class RoomCreate(BaseModel):
 
 class RoomUpdate(BaseModel):
     name_ru: str | None = None
-    name_ky: str | None = None
-    name_en: str | None = None
     description_ru: str | None = None
-    description_ky: str | None = None
-    description_en: str | None = None
     capacity: int | None = Field(default=None, ge=1, le=20)
     price_kgs: int | None = Field(default=None, ge=0)
     floor: int | None = None
@@ -48,11 +40,7 @@ class RoomPartnerView(BaseModel):
     id: int
     hotel_id: int
     name_ru: str
-    name_ky: str | None
-    name_en: str | None
     description_ru: str | None
-    description_ky: str | None
-    description_en: str | None
     capacity: int
     price_kgs: int
     floor: int | None
@@ -73,11 +61,7 @@ class RoomPartnerView(BaseModel):
             id=r.id,
             hotel_id=r.hotel_id,
             name_ru=r.name_ru,
-            name_ky=r.name_ky,
-            name_en=r.name_en,
             description_ru=r.description_ru,
-            description_ky=r.description_ky,
-            description_en=r.description_en,
             capacity=r.capacity,
             price_kgs=r.price_kgs,
             floor=r.floor,

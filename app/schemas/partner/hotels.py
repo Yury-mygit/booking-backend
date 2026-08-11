@@ -13,11 +13,7 @@ class HotelCreate(BaseModel):
     # передаст поле photos — Pydantic его игнорирует (extra="ignore" по
     # умолчанию), сохранение в БД не произойдёт.
     name_ru: str = Field(min_length=1, max_length=256)
-    name_ky: str | None = None
-    name_en: str | None = None
     description_ru: str | None = None
-    description_ky: str | None = None
-    description_en: str | None = None
     city: str = Field(min_length=1, max_length=128)
     address: str | None = None
     lat: float | None = None
@@ -30,11 +26,7 @@ class HotelCreate(BaseModel):
 
 class HotelUpdate(BaseModel):
     name_ru: str | None = None
-    name_ky: str | None = None
-    name_en: str | None = None
     description_ru: str | None = None
-    description_ky: str | None = None
-    description_en: str | None = None
     city: str | None = None
     address: str | None = None
     lat: float | None = None
@@ -78,11 +70,7 @@ class HotelPartnerView(BaseModel):
     id: int
     slug: str
     name_ru: str
-    name_ky: str | None
-    name_en: str | None
     description_ru: str | None
-    description_ky: str | None
-    description_en: str | None
     city: str
     address: str | None
     lat: float | None
@@ -107,11 +95,7 @@ class HotelPartnerView(BaseModel):
             id=h.id,
             slug=h.slug,
             name_ru=h.name_ru,
-            name_ky=h.name_ky,
-            name_en=h.name_en,
             description_ru=h.description_ru,
-            description_ky=h.description_ky,
-            description_en=h.description_en,
             city=h.city,
             address=h.address,
             lat=float(h.lat) if h.lat is not None else None,

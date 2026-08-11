@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.models.models import Lang, User, UserRole
+from app.models.models import User, UserRole
 from app.models.support import (
     SupportBlock,
     SupportMessage,
@@ -35,26 +35,9 @@ from app.models.support import (
 log = logging.getLogger("support.notify")
 
 
-# ─── localized templates ──────────────────────────────────────────────
-
-
-_BTN: dict[Lang, str] = {
-    Lang.ru: "Открыть",
-    Lang.en: "Open",
-    Lang.ky: "Ачуу",
-}
-
-_TPL_ADMIN_NEW = {
-    Lang.ru: "🆘 Поддержка — новое сообщение от {who} [{block}]\n{preview}",
-    Lang.en: "🆘 Support — new message from {who} [{block}]\n{preview}",
-    Lang.ky: "🆘 Колдоо — {who} [{block}] жаңы билдирүү жөнөттү\n{preview}",
-}
-
-_TPL_USER_REPLY = {
-    Lang.ru: "💬 Поддержка\n{preview}",
-    Lang.en: "💬 Support\n{preview}",
-    Lang.ky: "💬 Колдоо\n{preview}",
-}
+_BTN = "Открыть"
+_TPL_ADMIN_NEW = "🆘 Поддержка — новое сообщение от {who} [{block}]\n{preview}"
+_TPL_USER_REPLY = "💬 Поддержка\n{preview}"
 
 
 # ─── helpers ──────────────────────────────────────────────────────────
@@ -113,8 +96,7 @@ async def _deliver(
 ) -> None:
     if recipient.bot_blocked_or_unreachable:
         return
-    btn = _BTN.get(recipient.lang, _BTN[Lang.en])
-    status = await _send(recipient.telegram_id, text, _deep_link(block), btn)
+    status = await _send(recipient.telegram_id, text, _deep_link(block), _BTN)
     if status == 200:
         return
     if status in (400, 403):
@@ -156,8 +138,7 @@ async def notify_admins_on_user_message(thread_id: int, msg_id: int) -> None:
             return
 
         for r in recipients:
-            tpl = _TPL_ADMIN_NEW.get(r.lang, _TPL_ADMIN_NEW[Lang.en])
-            text = tpl.format(
+            text = _TPL_ADMIN_NEW.format(
                 who=_who(author),
                 block=thread.block.value,
                 preview=_preview(msg.body),
@@ -180,6 +161,5 @@ async def notify_user_on_admin_message(thread_id: int, msg_id: int) -> None:
         if user is None:
             return
 
-        tpl = _TPL_USER_REPLY.get(user.lang, _TPL_USER_REPLY[Lang.en])
-        text = tpl.format(preview=_preview(msg.body))
+        text = _TPL_USER_REPLY.format(preview=_preview(msg.body))
         await _deliver(db, user, text, thread.block)

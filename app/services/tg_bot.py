@@ -9,16 +9,6 @@ partner-action endpoints (share-to-self и т.п.).
 import httpx
 
 from app.core.config import settings
-from app.models.models import Hotel
-
-
-def hotel_name_by_lang(hotel: Hotel, lang: str) -> str:
-    """Локализованное имя отеля с fallback на name_ru."""
-    if lang == "ky" and hotel.name_ky:
-        return hotel.name_ky
-    if lang == "en" and hotel.name_en:
-        return hotel.name_en
-    return hotel.name_ru
 
 
 async def send_button_message(

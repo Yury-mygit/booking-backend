@@ -4,7 +4,7 @@ Run inside container:
     docker cp scripts/seed_fictional.py booking_dev_app:/app/scripts/
     docker exec booking_dev_app python scripts/seed_fictional.py
 
-Idempotent: re-running skips already-seeded hotels (matched by name_en) and only
+Idempotent: re-running skips already-seeded hotels (matched by name_ru) and only
 re-downloads missing photo files.
 
 Photo sources: Unsplash (free for commercial use, no attribution required).
@@ -276,7 +276,7 @@ async def upsert_partner(db, spec: dict) -> User:
 
 async def upsert_hotel(db, h_spec: dict, owner_id: int) -> tuple[Hotel, bool]:
     h = (
-        await db.execute(select(Hotel).where(Hotel.name_en == h_spec["name_en"]))
+        await db.execute(select(Hotel).where(Hotel.name_ru == h_spec["name_ru"]))
     ).scalar_one_or_none()
     if h is not None:
         return h, False
@@ -285,11 +285,7 @@ async def upsert_hotel(db, h_spec: dict, owner_id: int) -> tuple[Hotel, bool]:
         slug="__pending__",
         owner_user_id=owner_id,
         name_ru=h_spec["name_ru"],
-        name_ky=h_spec["name_ky"],
-        name_en=h_spec["name_en"],
         description_ru=h_spec["desc_ru"],
-        description_ky=h_spec["desc_ky"],
-        description_en=h_spec["desc_en"],
         city=h_spec["city"],
         address=h_spec["address_en"],
         lat=h_spec["lat"],
@@ -299,7 +295,7 @@ async def upsert_hotel(db, h_spec: dict, owner_id: int) -> tuple[Hotel, bool]:
     )
     db.add(h)
     await db.flush()
-    h.slug = await gen_unique_hotel_slug(db, h.name_en, h.id, exclude_id=h.id)
+    h.slug = await gen_unique_hotel_slug(db, h.name_ru, h.id, exclude_id=h.id)
     return h, True
 
 
@@ -339,11 +335,7 @@ async def upsert_rooms(db, hotel: Hotel, tier: float) -> list[Room]:
         r = Room(
             hotel_id=hotel.id,
             name_ru=r_spec["name_ru"],
-            name_ky=r_spec["name_ky"],
-            name_en=r_spec["name_en"],
             description_ru=r_spec["desc_ru"],
-            description_ky=r_spec["desc_ky"],
-            description_en=r_spec["desc_en"],
             capacity=r_spec["capacity"],
             beds=r_spec["beds"],
             price_kgs=r_spec["price"],
@@ -362,10 +354,10 @@ async def upsert_services(db, hotel: Hotel, key: str) -> None:
     ).scalars().all()
     if existing:
         return
-    for name_ru, name_ky, name_en, price in SERVICES[key]:
+    for name_ru, _name_ky, _name_en, price in SERVICES[key]:
         db.add(HotelService(
             hotel_id=hotel.id,
-            name_ru=name_ru, name_ky=name_ky, name_en=name_en,
+            name_ru=name_ru,
             price_kgs=price,
         ))
 

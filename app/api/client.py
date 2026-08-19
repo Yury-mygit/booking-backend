@@ -107,6 +107,17 @@ async def create_booking(
     if hotel.status != HotelStatus.published:
         raise APIError(404, "not_found", "Hotel not available")
 
+    # TBB-63: enforce min_stay_nights. Live-check против hotel row (снапшот
+    # появляется В МОМЕНТЕ create, использование snapshot тут — kostyl).
+    stay_nights = (payload.check_out - payload.check_in).days
+    if stay_nights < hotel.min_stay_nights:
+        raise APIError(
+            400,
+            "stay_too_short",
+            f"Минимальный срок бронирования — {hotel.min_stay_nights} ноч.",
+            detail={"min_stay_nights": hotel.min_stay_nights},
+        )
+
     # Lock availability rows in range; verify none are blocked/booked.
     nights = list(date_range_nights(payload.check_in, payload.check_out))
     existing = (

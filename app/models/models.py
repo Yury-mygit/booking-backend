@@ -119,6 +119,30 @@ class BookingStatus(str, enum.Enum):
     refunded = "refunded"
 
 
+class BookingMode(str, enum.Enum):
+    """TBB-61: способ бронирования (правило отеля).
+
+    - `instant` — booking мгновенно `confirmed=True`.
+    - `with_confirmation` — booking создаётся неподтверждённым, партнёр
+      вручную confirm/reject. TTL нет, партнёр решает когда обрабатывать.
+    """
+    instant = "instant"
+    with_confirmation = "with_confirmation"
+
+
+class CancelPolicy(str, enum.Enum):
+    """TBB-61: правило отмены (правило отеля).
+
+    - `free` — бесплатная в любое время.
+    - `hold_after_days` — если до заезда осталось меньше `cancel_days_threshold`
+      дней, при отмене удерживается `cancel_penalty_pct` % от суммы брони.
+      Актуальное движение денег — вне scope (партнёр обрабатывает вручную);
+      snapshot фиксирует сумму на момент договора.
+    """
+    free = "free"
+    hold_after_days = "hold_after_days"
+
+
 class BookingSource(str, enum.Enum):
     online = "online"
     walkin = "walkin"
@@ -260,6 +284,23 @@ class Hotel(Base):
     )
     checkin_time: Mapped[time | None] = mapped_column(Time(timezone=False))
     checkout_time: Mapped[time | None] = mapped_column(Time(timezone=False))
+    # TBB-61 rules: partner заполняет в подформе Amenities/Rules.
+    # Snapshot этих полей копируется в bookings.snapshot_* на момент create.
+    min_stay_nights: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1"
+    )
+    booking_mode: Mapped[BookingMode] = mapped_column(
+        ENUM(BookingMode, name="booking_mode"),
+        nullable=False,
+        server_default=BookingMode.instant.value,
+    )
+    cancel_policy: Mapped[CancelPolicy] = mapped_column(
+        ENUM(CancelPolicy, name="cancel_policy"),
+        nullable=False,
+        server_default=CancelPolicy.free.value,
+    )
+    cancel_days_threshold: Mapped[int | None] = mapped_column(Integer)
+    cancel_penalty_pct: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[HotelStatus] = mapped_column(
         ENUM(HotelStatus, name="hotel_status"),
         nullable=False,
@@ -371,6 +412,17 @@ class Booking(Base):
     confirmed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    # TBB-61 rules snapshot — immutable копия hotel.* на момент create.
+    # NULL для броней, созданных до миграции (семантика: правила по-default).
+    snapshot_min_stay_nights: Mapped[int | None] = mapped_column(Integer)
+    snapshot_booking_mode: Mapped[BookingMode | None] = mapped_column(
+        ENUM(BookingMode, name="booking_mode")
+    )
+    snapshot_cancel_policy: Mapped[CancelPolicy | None] = mapped_column(
+        ENUM(CancelPolicy, name="cancel_policy")
+    )
+    snapshot_cancel_days_threshold: Mapped[int | None] = mapped_column(Integer)
+    snapshot_cancel_penalty_pct: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

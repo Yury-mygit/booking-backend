@@ -3,6 +3,8 @@ from datetime import date, time
 from pydantic import BaseModel, Field, field_serializer, model_validator
 
 from app.models.models import (
+    BookingMode,
+    CancelPolicy,
     HotelAmenity,
     MealsKind,
     RoomAmenity,
@@ -101,6 +103,12 @@ class HotelDetails(BaseModel):
     amenities: list[HotelAmenity] = Field(default_factory=list)
     checkin_time: time | None = None
     checkout_time: time | None = None
+    # TBB-61 rules
+    min_stay_nights: int = 1
+    booking_mode: BookingMode = BookingMode.instant
+    cancel_policy: CancelPolicy = CancelPolicy.free
+    cancel_days_threshold: int | None = None
+    cancel_penalty_pct: int | None = Field(default=None, ge=0, le=100)
     rooms: list[RoomCard]
     services: list[ServicePublicView]
 

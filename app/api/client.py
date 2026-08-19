@@ -100,11 +100,11 @@ async def create_booking(
     if room.capacity < payload.adults + payload.children:
         raise APIError(400, "bad_request", "Too many guests for this room")
 
-    # Hotel must be published.
-    hotel_status = (
-        await db.execute(select(Hotel.status).where(Hotel.id == room.hotel_id))
+    # Hotel must be published (нужен полный row — с него snapshot'ятся правила).
+    hotel = (
+        await db.execute(select(Hotel).where(Hotel.id == room.hotel_id))
     ).scalar_one()
-    if hotel_status != HotelStatus.published:
+    if hotel.status != HotelStatus.published:
         raise APIError(404, "not_found", "Hotel not available")
 
     # Lock availability rows in range; verify none are blocked/booked.
@@ -169,6 +169,13 @@ async def create_booking(
         child_ages=payload.child_ages,
         total_kgs=total,
         status=BookingStatus.pending,
+        # TBB-61: immutable snapshot правил hotel на момент создания.
+        # Партнёр не может ретроактивно ужесточить условия уже созданной брони.
+        snapshot_min_stay_nights=hotel.min_stay_nights,
+        snapshot_booking_mode=hotel.booking_mode,
+        snapshot_cancel_policy=hotel.cancel_policy,
+        snapshot_cancel_days_threshold=hotel.cancel_days_threshold,
+        snapshot_cancel_penalty_pct=hotel.cancel_penalty_pct,
     )
     db.add(booking)
     hotel_id_for_pub = room.hotel_id  # capture before commit (avoid expired attrs).

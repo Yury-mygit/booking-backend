@@ -2,7 +2,7 @@ from datetime import datetime, time
 
 from pydantic import BaseModel, Field, field_serializer
 
-from app.models.models import Hotel, HotelAmenity, HotelStatus, MealsKind
+from app.models.models import BookingMode, CancelPolicy, Hotel, HotelAmenity, HotelStatus, MealsKind
 from app.services.photo_format import to_response_urls
 
 
@@ -36,6 +36,12 @@ class HotelUpdate(BaseModel):
     amenities: list[HotelAmenity] | None = None
     checkin_time: time | None = None
     checkout_time: time | None = None
+    # TBB-61 rules (все опциональны; при отсутствии — не трогаем БД).
+    min_stay_nights: int | None = Field(default=None, ge=1, le=30)
+    booking_mode: BookingMode | None = None
+    cancel_policy: CancelPolicy | None = None
+    cancel_days_threshold: int | None = Field(default=None, ge=0, le=365)
+    cancel_penalty_pct: int | None = Field(default=None, ge=0, le=100)
 
 
 class ChecklistAction(BaseModel):
@@ -81,6 +87,12 @@ class HotelPartnerView(BaseModel):
     amenities: list[HotelAmenity] = Field(default_factory=list)
     checkin_time: time | None = None
     checkout_time: time | None = None
+    # TBB-61 rules
+    min_stay_nights: int = 1
+    booking_mode: BookingMode = BookingMode.instant
+    cancel_policy: CancelPolicy = CancelPolicy.free
+    cancel_days_threshold: int | None = None
+    cancel_penalty_pct: int | None = None
     published_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -106,6 +118,11 @@ class HotelPartnerView(BaseModel):
             amenities=[HotelAmenity(a) for a in (h.amenities or [])],
             checkin_time=h.checkin_time,
             checkout_time=h.checkout_time,
+            min_stay_nights=h.min_stay_nights,
+            booking_mode=h.booking_mode,
+            cancel_policy=h.cancel_policy,
+            cancel_days_threshold=h.cancel_days_threshold,
+            cancel_penalty_pct=h.cancel_penalty_pct,
             published_at=h.published_at,
             created_at=h.created_at,
             updated_at=h.updated_at,

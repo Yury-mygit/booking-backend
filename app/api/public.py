@@ -240,6 +240,11 @@ async def hotel_details(
         amenities=hotel.amenities or [],
         checkin_time=hotel.checkin_time,
         checkout_time=hotel.checkout_time,
+        min_stay_nights=hotel.min_stay_nights,
+        booking_mode=hotel.booking_mode,
+        cancel_policy=hotel.cancel_policy,
+        cancel_days_threshold=hotel.cancel_days_threshold,
+        cancel_penalty_pct=hotel.cancel_penalty_pct,
         rooms=cards,
         services=services,
     )

@@ -120,27 +120,40 @@ class BookingStatus(str, enum.Enum):
 
 
 class BookingMode(str, enum.Enum):
-    """TBB-61: способ бронирования (правило отеля).
+    """TBB-61/TBB-64: способ бронирования (правило отеля).
 
     - `instant` — booking мгновенно `confirmed=True`.
-    - `with_confirmation` — booking создаётся неподтверждённым, партнёр
+    - `manual_confirmation` — booking создаётся неподтверждённым, партнёр
       вручную confirm/reject. TTL нет, партнёр решает когда обрабатывать.
+      Переименован из `with_confirmation` в TBB-64.
+    - `phone_confirmation` — declarative: партнёр перезвонит клиенту.
+      Booking создаётся сразу confirmed; актуальный звонок — вне платформы.
+    - `advance_payment` — declarative: требуется предоплата, партнёр
+      отправит реквизиты. Booking создаётся confirmed; оплата — вне
+      платформы (до появления TBB-54 live payments).
     """
     instant = "instant"
-    with_confirmation = "with_confirmation"
+    manual_confirmation = "manual_confirmation"
+    phone_confirmation = "phone_confirmation"
+    advance_payment = "advance_payment"
 
 
 class CancelPolicy(str, enum.Enum):
-    """TBB-61: правило отмены (правило отеля).
+    """TBB-61/TBB-64: правило отмены (правило отеля).
 
     - `free` — бесплатная в любое время.
     - `hold_after_days` — если до заезда осталось меньше `cancel_days_threshold`
       дней, при отмене удерживается `cancel_penalty_pct` % от суммы брони.
-      Актуальное движение денег — вне scope (партнёр обрабатывает вручную);
-      snapshot фиксирует сумму на момент договора.
+    - `non_refundable` — отмена без возврата (100% всегда).
+    - `first_night_only` — удержание стоимости первой ночи.
+
+    Актуальное движение денег — вне scope (партнёр обрабатывает вручную);
+    snapshot фиксирует сумму на момент договора для отображения клиенту.
     """
     free = "free"
     hold_after_days = "hold_after_days"
+    non_refundable = "non_refundable"
+    first_night_only = "first_night_only"
 
 
 class BookingSource(str, enum.Enum):

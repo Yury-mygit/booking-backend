@@ -24,6 +24,7 @@ from app.models.models import (
     Room,
 )
 from app.schemas.hotels import serialize_hotel_amenities
+from app.services.hotel_amenities import validate_hotel_amenity_slugs
 from app.schemas.partner import (
     ChecklistAction,
     ChecklistItem,
@@ -74,6 +75,7 @@ async def create_hotel(
     self_access = ctx.accessible_owners.get(ctx.user.id)
     if self_access is None or not self_access.is_self:
         raise APIError(403, "permission_denied", "Only the owner can create hotels")
+    await validate_hotel_amenity_slugs(db, payload.amenities)
     h = Hotel(
         owner_user_id=ctx.user.id,
         slug="__pending__",  # placeholder; replaced after flush() gives id
@@ -281,6 +283,9 @@ async def update_hotel(
     h = await scope.get_my_hotel(db, ctx, hotel_id, require_perm="manage_hotel")
     data = payload.model_dump(exclude_unset=True)
     if "amenities" in data and data["amenities"] is not None:
+        await validate_hotel_amenity_slugs(
+            db, payload.amenities, previous=h.amenities or []
+        )
         data["amenities"] = serialize_hotel_amenities(payload.amenities)
     name_ru_changed = "name_ru" in data and data["name_ru"] != h.name_ru
     new_status = data.get("status")

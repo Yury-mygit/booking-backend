@@ -692,6 +692,35 @@ class ChatMessage(Base):
     )
 
 
+class HotelAmenityOption(Base):
+    """TBB-65: динамический каталог удобств отеля. Админ через
+    `/admin/settings/amenities/*` создаёт варианты и управляет их
+    видимостью; партнёр в hotel-edit → amenities видит только active.
+
+    v1 — только секция `general`; секция `dining` также в БД (seed),
+    но админского UI пока нет.
+    """
+
+    __tablename__ = "hotel_amenity_options"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    section: Mapped[str] = mapped_column(String(16), nullable=False)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    description: Mapped[str] = mapped_column(String(200), nullable=False)
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_hotel_amenity_options_section_sort", "section", "sort_order"),
+    )
+
+
 class WebhookIdempotency(Base):
     """DP-5: idempotency-key cache для inbound webhooks (DevPay etc.)."""
 

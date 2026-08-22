@@ -5,7 +5,6 @@ from pydantic import BaseModel, Field, field_serializer, model_validator
 from app.models.models import (
     BookingMode,
     CancelPolicy,
-    HotelAmenity,
     MealsKind,
     RoomAmenity,
     ROOM_AMENITIES_PAID_ALLOWED,
@@ -24,11 +23,12 @@ class RoomAmenityItem(BaseModel):
         return self
 
 
-def serialize_hotel_amenities(items: list[HotelAmenity] | None) -> list[str]:
-    """Convert HotelAmenity enums to plain str for JSONB storage."""
+def serialize_hotel_amenities(items: list[str] | None) -> list[str]:
+    """TBB-65: hotels.amenities — plain list of slugs (валидация — в
+    services.hotel_amenities.validate_hotel_amenity_slugs)."""
     if not items:
         return []
-    return [a.value if isinstance(a, HotelAmenity) else a for a in items]
+    return list(items)
 
 
 def serialize_room_amenities(items: list["RoomAmenityItem"] | None) -> list[dict]:
@@ -89,6 +89,13 @@ class ServicePublicView(BaseModel):
     price_kgs: int | None
 
 
+class AmenityDetail(BaseModel):
+    """TBB-65: user-facing enriched запись каталога удобств."""
+    slug: str
+    description: str
+    section: str
+
+
 class HotelDetails(BaseModel):
     id: int
     slug: str
@@ -100,7 +107,8 @@ class HotelDetails(BaseModel):
     lng: float | None
     photos: list[str]
     meals: MealsKind
-    amenities: list[HotelAmenity] = Field(default_factory=list)
+    amenities: list[str] = Field(default_factory=list)
+    amenities_detail: list[AmenityDetail] = Field(default_factory=list)
     checkin_time: time | None = None
     checkout_time: time | None = None
     # TBB-61 rules

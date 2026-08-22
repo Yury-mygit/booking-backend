@@ -16,21 +16,95 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, exists, func, not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import asyncio
+import json
+
+from fastapi import Request
+from fastapi.responses import StreamingResponse
+
 from app.core.database import get_db
 from app.core.exceptions import APIError
+from app.services import amenity_events
 from app.models.models import (
     Availability,
     AvailabilityStatus,
     Hotel,
+    HotelAmenityOption,
     HotelService,
     HotelStatus,
     Room,
     RoomStatus,
 )
-from app.schemas.hotels import HotelDetails, HotelListItem, RoomCard, ServicePublicView
+from app.schemas.hotels import (
+    AmenityDetail,
+    HotelDetails,
+    HotelListItem,
+    RoomCard,
+    ServicePublicView,
+)
 from app.utils import date_range_nights
 
 router = APIRouter(prefix="/public", tags=["public"])
+
+
+@router.get("/amenity-options", response_model=list[AmenityDetail])
+async def public_amenity_options(
+    section: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """TBB-65: активные варианты удобств по секции — для партнёрской формы.
+    Только `active=True`, отсортировано по `sort_order`."""
+    rows = (
+        await db.execute(
+            select(
+                HotelAmenityOption.slug,
+                HotelAmenityOption.description,
+            )
+            .where(
+                HotelAmenityOption.section == section,
+                HotelAmenityOption.active.is_(True),
+            )
+            .order_by(HotelAmenityOption.sort_order)
+        )
+    ).all()
+    return [
+        AmenityDetail(slug=r.slug, description=r.description, section=section)
+        for r in rows
+    ]
+
+
+_AMENITY_HEARTBEAT_SECONDS = 30
+
+
+@router.get("/amenity-options/events")
+async def amenity_options_events(request: Request) -> StreamingResponse:
+    """TBB-65: SSE-refresh каталога удобств.
+    Global stream (не section-specific): любая admin-мутация → refresh.
+    Партнёр перезапрашивает `/public/amenity-options?section=…`.
+    """
+    async def gen():
+        yield "retry: 5000\n\n"
+        sub = amenity_events.subscribe()
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(
+                        sub.__anext__(), timeout=_AMENITY_HEARTBEAT_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            await sub.aclose()
+
+    headers = {
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
 
 
 def _validate_date_range(check_in: date | None, check_out: date | None) -> None:
@@ -226,6 +300,28 @@ async def hotel_details(
         for s in services_rows
     ]
 
+    slug_list = list(hotel.amenities or [])
+    amenities_detail: list[AmenityDetail] = []
+    if slug_list:
+        rows = (
+            await db.execute(
+                select(
+                    HotelAmenityOption.slug,
+                    HotelAmenityOption.description,
+                    HotelAmenityOption.section,
+                )
+                .where(
+                    HotelAmenityOption.slug.in_(slug_list),
+                    HotelAmenityOption.active.is_(True),
+                )
+                .order_by(HotelAmenityOption.section, HotelAmenityOption.sort_order)
+            )
+        ).all()
+        amenities_detail = [
+            AmenityDetail(slug=r.slug, description=r.description, section=r.section)
+            for r in rows
+        ]
+
     return HotelDetails(
         id=hotel.id,
         slug=hotel.slug,
@@ -237,7 +333,8 @@ async def hotel_details(
         lng=float(hotel.lng) if hotel.lng is not None else None,
         photos=hotel.photos or [],
         meals=hotel.meals,
-        amenities=hotel.amenities or [],
+        amenities=slug_list,
+        amenities_detail=amenities_detail,
         checkin_time=hotel.checkin_time,
         checkout_time=hotel.checkout_time,
         min_stay_nights=hotel.min_stay_nights,

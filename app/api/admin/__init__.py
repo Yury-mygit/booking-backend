@@ -12,7 +12,7 @@ Split-out по поддоменам (см. карту #49 этап 3, 2026-06-01
 """
 from fastapi import APIRouter
 
-from app.api.admin import bookings, hotels, metrics, support, users
+from app.api.admin import amenity_options, bookings, hotels, metrics, support, users
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 router.include_router(users.router)
@@ -20,3 +20,4 @@ router.include_router(hotels.router)
 router.include_router(bookings.router)
 router.include_router(metrics.router)
 router.include_router(support.router)
+router.include_router(amenity_options.router)

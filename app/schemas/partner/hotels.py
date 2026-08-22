@@ -2,7 +2,7 @@ from datetime import datetime, time
 
 from pydantic import BaseModel, Field, field_serializer
 
-from app.models.models import BookingMode, CancelPolicy, Hotel, HotelAmenity, HotelStatus, MealsKind
+from app.models.models import BookingMode, CancelPolicy, Hotel, HotelStatus, MealsKind
 from app.services.photo_format import to_response_urls
 
 
@@ -19,7 +19,7 @@ class HotelCreate(BaseModel):
     lat: float | None = None
     lng: float | None = None
     meals: MealsKind = MealsKind.none
-    amenities: list[HotelAmenity] = Field(default_factory=list)
+    amenities: list[str] = Field(default_factory=list)
     checkin_time: time | None = None
     checkout_time: time | None = None
 
@@ -33,7 +33,7 @@ class HotelUpdate(BaseModel):
     lng: float | None = None
     status: HotelStatus | None = None
     meals: MealsKind | None = None
-    amenities: list[HotelAmenity] | None = None
+    amenities: list[str] | None = None
     checkin_time: time | None = None
     checkout_time: time | None = None
     # TBB-61 rules (все опциональны; при отсутствии — не трогаем БД).
@@ -84,7 +84,7 @@ class HotelPartnerView(BaseModel):
     photos: list[str]
     status: HotelStatus
     meals: MealsKind
-    amenities: list[HotelAmenity] = Field(default_factory=list)
+    amenities: list[str] = Field(default_factory=list)
     checkin_time: time | None = None
     checkout_time: time | None = None
     # TBB-61 rules
@@ -115,7 +115,7 @@ class HotelPartnerView(BaseModel):
             photos=h.photos or [],
             status=h.status,
             meals=h.meals,
-            amenities=[HotelAmenity(a) for a in (h.amenities or [])],
+            amenities=list(h.amenities or []),
             checkin_time=h.checkin_time,
             checkout_time=h.checkout_time,
             min_stay_nights=h.min_stay_nights,

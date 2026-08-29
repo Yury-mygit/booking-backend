@@ -27,7 +27,19 @@ from app.models.models import Lang, PartnerProfile, PartnerStaff, Session, User,
 from app.schemas.auth import AuthTgRequest, AuthTgResponse, AuthTgUser
 from app.schemas.partner import OwnerAccess, StaffPerms
 from app.services.client_avatar import refresh_client_avatar_from_tg
+from app.services.media_client import to_public_url
 from app.utils import get_or_create_client_for_user
+
+
+def _role_icons_for(roles: list[UserRole]) -> dict[str, str]:
+    """Мапа `{role_code: media_public_url}` только для accessible ролей.
+    UUID'ы — в `settings.role_icons`; URL строится через `to_public_url`."""
+    out: dict[str, str] = {}
+    for role in roles:
+        asset_id = settings.role_icons.get(role.value)
+        if asset_id:
+            out[role.value] = to_public_url(asset_id)
+    return out
 
 
 async def _owners_response(db: AsyncSession, user: User) -> list[OwnerAccess]:
@@ -213,6 +225,7 @@ async def whoami(
         "bot_blocked_or_unreachable": ctx.user.bot_blocked_or_unreachable,
         "accessible_owners": [o.model_dump() for o in accessible_owners],
         "available_roles": [r.value for r in available_roles],
+        "role_icons": _role_icons_for(available_roles),
     }
 
 

@@ -58,5 +58,11 @@ async def list_media_refs(db: AsyncSession = Depends(get_db)) -> dict:
         """
     )
     rows = (await db.execute(sql)).all()
-    refs = [r[0] for r in rows if r[0] and _UUID_RE.match(r[0])]
-    return {"asset_ids": refs, "count": len(refs)}
+    refs = {r[0] for r in rows if r[0] and _UUID_RE.match(r[0])}
+    # TBB-66: инфографика entry-view — статические asset_id из
+    # settings.role_icons. Держим их живыми в GC, даже если ни одна
+    # доменная сущность (hotels/rooms/clients) на них не ссылается.
+    for asset_id in settings.role_icons.values():
+        if _UUID_RE.match(asset_id):
+            refs.add(asset_id)
+    return {"asset_ids": sorted(refs), "count": len(refs)}

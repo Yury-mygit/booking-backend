@@ -49,5 +49,14 @@ class Settings(BaseSettings):
     devpay_public_url: str = "https://devpay.dev.raftforge.art"
     devpay_merchant_secret: str = ""
 
+    # TBB-66: инфографика entry-view. Role code → media asset_id (UUID).
+    # whoami отдаёт `role_icons: {code: media_public_url}` только для
+    # accessible ролей; media_refs union держит эти три UUID живыми для GC.
+    role_icons: dict[str, str] = {
+        "client": "bd53416c-5664-48e5-b326-4f1a9a58b8cb",
+        "partner": "d5c3b1d9-b6b7-46a2-922e-d820682f88e5",
+        "admin": "ac583e12-bbbc-48f4-bc9c-5c95ffe2a759",
+    }
+
 
 settings = Settings()

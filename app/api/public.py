@@ -159,6 +159,7 @@ async def list_hotels(
     adults: int = Query(default=1, ge=1, le=8),
     children: int = Query(default=0, ge=0, le=6),
     infants: int = Query(default=0, ge=0, le=4),
+    sort: Literal["price_asc", "price_desc"] | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> list[HotelListItem]:
     _validate_date_range(check_in, check_out)
@@ -194,6 +195,13 @@ async def list_hotels(
     q_stripped = (q or "").strip()
     if q_stripped:
         stmt = stmt.where(Hotel.name_ru.ilike(f"%{q_stripped}%"))
+
+    # TBB-71: сортировка по цене. NULLS LAST — отели без цены (пусты
+    # rooms или все с price=NULL) уходят в конец при любом направлении.
+    if sort == "price_asc":
+        stmt = stmt.order_by(fit_rooms.c.min_price.asc().nulls_last())
+    elif sort == "price_desc":
+        stmt = stmt.order_by(fit_rooms.c.min_price.desc().nulls_last())
 
     rows = (await db.execute(stmt)).all()
     return [

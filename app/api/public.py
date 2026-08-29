@@ -152,6 +152,8 @@ def _room_unavailable_clause(check_in: date, check_out: date):
 @router.get("/hotels", response_model=list[HotelListItem])
 async def list_hotels(
     city: str | None = Query(default=None),
+    destination_id: int | None = Query(default=None, ge=1),
+    q: str | None = Query(default=None, max_length=128),
     check_in: date | None = Query(default=None),
     check_out: date | None = Query(default=None),
     adults: int = Query(default=1, ge=1, le=8),
@@ -185,6 +187,13 @@ async def list_hotels(
     )
     if city:
         stmt = stmt.where(Hotel.city.ilike(f"%{city}%"))
+    # TBB-69: фильтр по destination (регион, single FK) — приоритетнее city.
+    if destination_id is not None:
+        stmt = stmt.where(Hotel.destination_id == destination_id)
+    # TBB-69: full-text-lite поиск по name_ru (ILIKE подстрока, v1).
+    q_stripped = (q or "").strip()
+    if q_stripped:
+        stmt = stmt.where(Hotel.name_ru.ilike(f"%{q_stripped}%"))
 
     rows = (await db.execute(stmt)).all()
     return [

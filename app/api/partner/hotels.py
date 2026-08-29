@@ -19,6 +19,7 @@ from app.services.hotel_share import share_hotel_to_self
 from app.models.models import (
     Booking,
     BookingStatus,
+    Destination,
     Hotel,
     HotelStatus,
     Room,
@@ -39,6 +40,19 @@ from app.utils import (
 )
 
 router = APIRouter()  # prefix задан в partner/__init__.py
+
+
+async def _validate_destination(db: AsyncSession, destination_id: int) -> None:
+    """TBB-72: destination_id должен существовать и быть active."""
+    row = (
+        await db.execute(
+            select(Destination.id).where(
+                Destination.id == destination_id, Destination.active.is_(True)
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise APIError(404, "destination_not_found", f"destination {destination_id} not found or inactive")
 
 
 # ─── Hotels ────────────────────────────────────────────────────────────────
@@ -76,12 +90,14 @@ async def create_hotel(
     if self_access is None or not self_access.is_self:
         raise APIError(403, "permission_denied", "Only the owner can create hotels")
     await validate_hotel_amenity_slugs(db, payload.amenities)
+    await _validate_destination(db, payload.destination_id)
     h = Hotel(
         owner_user_id=ctx.user.id,
         slug="__pending__",  # placeholder; replaced after flush() gives id
         name_ru=payload.name_ru,
         description_ru=payload.description_ru,
         city=payload.city,
+        destination_id=payload.destination_id,
         address=payload.address,
         lat=payload.lat,
         lng=payload.lng,
@@ -287,6 +303,8 @@ async def update_hotel(
             db, payload.amenities, previous=h.amenities or []
         )
         data["amenities"] = serialize_hotel_amenities(payload.amenities)
+    if "destination_id" in data and data["destination_id"] is not None:
+        await _validate_destination(db, data["destination_id"])
     name_ru_changed = "name_ru" in data and data["name_ru"] != h.name_ru
     new_status = data.get("status")
     becomes_published = (

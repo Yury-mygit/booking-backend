@@ -15,6 +15,8 @@ class HotelCreate(BaseModel):
     name_ru: str = Field(min_length=1, max_length=256)
     description_ru: str | None = None
     city: str = Field(min_length=1, max_length=128)
+    # TBB-72: направление (регион) — обязательно при создании.
+    destination_id: int = Field(ge=1)
     address: str | None = None
     lat: float | None = None
     lng: float | None = None
@@ -28,6 +30,8 @@ class HotelUpdate(BaseModel):
     name_ru: str | None = None
     description_ru: str | None = None
     city: str | None = None
+    # TBB-72: направление можно менять на форме описания.
+    destination_id: int | None = Field(default=None, ge=1)
     address: str | None = None
     lat: float | None = None
     lng: float | None = None
@@ -78,6 +82,7 @@ class HotelPartnerView(BaseModel):
     name_ru: str
     description_ru: str | None
     city: str
+    destination_id: int
     address: str | None
     lat: float | None
     lng: float | None
@@ -109,6 +114,7 @@ class HotelPartnerView(BaseModel):
             name_ru=h.name_ru,
             description_ru=h.description_ru,
             city=h.city,
+            destination_id=h.destination_id,
             address=h.address,
             lat=float(h.lat) if h.lat is not None else None,
             lng=float(h.lng) if h.lng is not None else None,

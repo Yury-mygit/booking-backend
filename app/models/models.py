@@ -281,6 +281,11 @@ class Hotel(Base):
     name_ru: Mapped[str] = mapped_column(String(256), nullable=False)
     description_ru: Mapped[str | None] = mapped_column(Text)
     city: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    # TBB-68: направление (регион). Отель принадлежит одному destination;
+    # клиент фильтрует по нему на списке отелей.
+    destination_id: Mapped[int] = mapped_column(
+        ForeignKey("destinations.id", ondelete="RESTRICT"), index=True, nullable=False
+    )
     address: Mapped[str | None] = mapped_column(String(512))
     lat: Mapped[float | None] = mapped_column(Numeric(9, 6))
     lng: Mapped[float | None] = mapped_column(Numeric(9, 6))
@@ -689,6 +694,35 @@ class ChatMessage(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Destination(Base):
+    """TBB-68: каталог направлений (регионов) для клиентского фильтра
+    списка отелей. Один destination = один регион; отель принадлежит
+    ровно одному destination (single FK, не M2M).
+
+    v1 — 4 seed'а: Бишкек / Иссык-Куль / Нарын / Ош. Иссык-Куль
+    объединяет города Чолпон-Ата + Каракол (см. миграцию backfill).
+
+    Админский CRUD — отдельная story позже (сейчас правки через psql).
+    """
+
+    __tablename__ = "destinations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    name_ru: Mapped[str] = mapped_column(String(80), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_destinations_active_sort", "active", "sort_order"),
     )
 
 

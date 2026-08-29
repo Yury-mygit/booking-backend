@@ -96,6 +96,14 @@ class AmenityDetail(BaseModel):
     section: str
 
 
+class DestinationPublic(BaseModel):
+    """TBB-68: направление для клиентского фильтра списка отелей."""
+    id: int
+    slug: str
+    name_ru: str
+    sort_order: int
+
+
 class HotelDetails(BaseModel):
     id: int
     slug: str

@@ -28,6 +28,7 @@ from app.services import amenity_events
 from app.models.models import (
     Availability,
     AvailabilityStatus,
+    Destination,
     Hotel,
     HotelAmenityOption,
     HotelService,
@@ -37,6 +38,7 @@ from app.models.models import (
 )
 from app.schemas.hotels import (
     AmenityDetail,
+    DestinationPublic,
     HotelDetails,
     HotelListItem,
     RoomCard,
@@ -45,6 +47,25 @@ from app.schemas.hotels import (
 from app.utils import date_range_nights
 
 router = APIRouter(prefix="/public", tags=["public"])
+
+
+@router.get("/destinations", response_model=list[DestinationPublic])
+async def public_destinations(
+    db: AsyncSession = Depends(get_db),
+) -> list[DestinationPublic]:
+    """TBB-68: активные направления для клиентского фильтра «Направление»
+    в списке отелей. Сортировка — по (sort_order, name_ru)."""
+    rows = (
+        await db.execute(
+            select(Destination)
+            .where(Destination.active.is_(True))
+            .order_by(Destination.sort_order, Destination.name_ru)
+        )
+    ).scalars().all()
+    return [
+        DestinationPublic(id=d.id, slug=d.slug, name_ru=d.name_ru, sort_order=d.sort_order)
+        for d in rows
+    ]
 
 
 @router.get("/amenity-options", response_model=list[AmenityDetail])

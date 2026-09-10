@@ -229,6 +229,8 @@ async def hotel_details(
     children: int = Query(default=0, ge=0, le=6),
     infants: int = Query(default=0, ge=0, le=4),
     beds: Literal["single", "double"] | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=100),
+    sort: Literal["price_asc", "price_desc"] | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> HotelDetails:
     _validate_date_range(check_in, check_out)
@@ -265,6 +267,11 @@ async def hotel_details(
         return r.capacity >= adults + children
 
     rooms = [r for r in rooms if matches_beds(r)]
+
+    # Free-text по имени комнаты (case-insensitive substring, RU/EN).
+    q_norm = (q or "").strip().lower()
+    if q_norm:
+        rooms = [r for r in rooms if q_norm in (r.name_ru or "").lower()]
 
     # Per-room availability + total_kgs for dates. Sourced even when no
     # filter applies so that surviving cards still get total_kgs_for_dates.
@@ -319,6 +326,11 @@ async def hotel_details(
                 amenities=r.amenities or [],
             )
         )
+
+    if sort == "price_asc":
+        cards.sort(key=lambda c: c.price_kgs)
+    elif sort == "price_desc":
+        cards.sort(key=lambda c: c.price_kgs, reverse=True)
 
     services_rows = (
         (

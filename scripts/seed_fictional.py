@@ -1,4 +1,4 @@
-"""Seed 5 fictional hotels (~10 rooms each) + services, без фото.
+"""Seed 5 fictional hotels (~10 rooms each) + services + Unsplash photos.
 
 Run inside container:
     docker cp scripts/seed_fictional.py scripts/seed_common.py booking_dev_app:/app/scripts/
@@ -6,14 +6,18 @@ Run inside container:
 Локально (из корня репо, venv, .env с DATABASE_URL):
     PYTHONPATH=. .venv/Scripts/python.exe scripts/seed_fictional.py
 
-Idempotent: re-running skips already-seeded hotels (matched by name_ru).
+Idempotent: re-running skips already-seeded hotels (matched by name_ru) and
+only fills photos that are still empty.
 
-Фото не сеются (TBB-73): с 2026-06-07 фото живут в media (asset_id), прежние
-`/api/v1/photos/...` URL'ы отфильтровываются. Добавлять — через UI партнёра.
+Фото (TBB-73): качаются с Unsplash (free for commercial use, no attribution
+required) и загружаются в media через `upload_to_media` (MEDIA_INTERNAL_URL;
+на сервере media_dev_app, локально — media стенда); в `photos` — asset_id.
+Не скачалось — фото пропускается, сид не падает.
 Coordinates: anchored on real hotel-district points from OSM Overpass.
 """
 import asyncio
 
+import httpx
 from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
@@ -26,8 +30,37 @@ from app.models.models import (
     User,
     UserRole,
 )
+from app.services.media_client import upload_to_media
 from app.utils import gen_unique_hotel_slug
 from seed_common import destination_id_for
+
+UNSPLASH = "https://images.unsplash.com/photo-{id}?w=1200&q=80&auto=format&fit=crop"
+UA = "Mozilla/5.0 (booking-seed)"
+
+
+async def download(client: httpx.AsyncClient, photo_id: str, attempts: int = 3) -> bytes | None:
+    """Unsplash photo by ID; None if it could not be fetched.
+    httpx, не urllib: через HTTP-прокси urllib обрывал ответы >~200 КБ."""
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = await client.get(UNSPLASH.format(id=photo_id))
+            resp.raise_for_status()
+            return resp.content
+        except httpx.HTTPError as e:
+            if attempt == attempts:
+                print(f"    ! photo {photo_id}: {e!r}")
+    return None
+
+
+async def upload_photos(client: httpx.AsyncClient, photo_ids: list[str], uploader_id: int) -> list[str]:
+    """Download + upload to media; returns asset_ids (skips failed downloads).
+    media дедуплицирует по sha256 — общий для отелей кадр хранится один раз."""
+    asset_ids = []
+    for pid in photo_ids:
+        data = await download(client, pid)
+        if data is not None:
+            asset_ids.append(await upload_to_media(data, "image/jpeg", uploader_id=uploader_id))
+    return asset_ids
 
 
 # ─── Static config ────────────────────────────────────────────────────────────
@@ -54,6 +87,8 @@ HOTELS = [
         "desc_ru": "Камерный бутик-отель в центре Бишкека, в шаге от площади Ала-Тоо и Дубового парка. Авторские интерьеры, завтрак во внутреннем дворе, прокат велосипедов.",
         "desc_ky": "Бишкектин борборундагы, Ала-Тоо аянты менен Эмен паркынан бир кадам алыс жайгашкан кичинекей бутик-мейманкана. Авторлук интерьерлер, эртең мененки тамак ички короодо, велосипед ижара берилет.",
         "desc_en": "Cosy boutique hotel in central Bishkek, steps from Ala-Too Square and Oak Park. Designer interiors, breakfast in the courtyard, complimentary bike rental.",
+        "exterior": ["1551016043-06ec2173531b", "1607320895054-c5c543e9a069"],
+        "lobby": "1625244724120-1fd1d34d00f6",
     },
     {
         "key": "manas-garden-hotel",
@@ -69,6 +104,8 @@ HOTELS = [
         "desc_ru": "Семейный отель в зелёной зоне на проспекте Манаса. Просторные номера, ресторан кыргызской кухни, большая летняя терраса с видом на горы Ала-Арча.",
         "desc_ky": "Манас проспектиндеги жашыл зонада жайгашкан үй-бүлөлүк мейманкана. Кенен бөлмөлөр, кыргыз тамак-аш ресторан, Ала-Арча тоолоруна көрүнүш бере турган чоң жайкы террасса.",
         "desc_en": "Family-friendly hotel in a leafy stretch of Manas Avenue. Spacious rooms, a restaurant serving Kyrgyz cuisine, and a large summer terrace overlooking the Ala-Archa range.",
+        "exterior": ["1668480441891-3744c25337a3", "1536269404660-0a8d4e88bf1b"],
+        "lobby": "1495365200479-c4ed1d35e1aa",
     },
     {
         "key": "karakol-alpine-lodge",
@@ -84,6 +121,8 @@ HOTELS = [
         "desc_ru": "База для горных походов в нескольких минутах от центра Каракола. Сушилка для снаряжения, гид-сервис, сауна после трекинга, домашний завтрак.",
         "desc_ky": "Каракол борборунан бир нече мүнөттө жайгашкан тоо жортуулдары үчүн база. Жабдууларды кургатуу бөлмөсү, гид кызматы, жортуулдан кийинки сауна, үй эртең мененки.",
         "desc_en": "Base camp for mountain trekking, minutes from central Karakol. Gear drying room, guide service, post-hike sauna, home-cooked breakfast.",
+        "exterior": ["1611892440504-42a792e24d32", "1607320879139-1bb689f6a68f"],
+        "lobby": "1573052905904-34ad8c27f0cc",
     },
     {
         "key": "issyk-kul-pearl-resort",
@@ -99,6 +138,8 @@ HOTELS = [
         "desc_ru": "Курортный комплекс на берегу Иссык-Куля. Свой пляж, бассейн с подогревом, прокат катамаранов, детская площадка. Открыт круглый год.",
         "desc_ky": "Ысык-Көлдүн жээгиндеги курорттук комплекс. Өзүнүн жээги, ысытылуучу бассейн, катамарандарды ижарага берүү, балдар аянтчасы. Жыл бою иштейт.",
         "desc_en": "Lakeside resort on the shore of Issyk-Kul. Private beach, heated pool, catamaran rental, kids' playground. Open year-round.",
+        "exterior": ["1472510771109-39b92752a6b9", "1570206986634-afd7cccb68d3"],
+        "lobby": "1660557989695-14fac79c086d",
     },
     {
         "key": "sulayman-stone-inn",
@@ -114,9 +155,26 @@ HOTELS = [
         "desc_ru": "Уютная гостиница у подножия горы Сулайман-Тоо в Оше. Восточный завтрак, чайхана во дворе, экскурсии по Великому шёлковому пути.",
         "desc_ky": "Оштогу Сулайман-Тоо тоосунун этегиндеги жайлуу мейманкана. Чыгыш эртең мененки, короодо чайкана, Улуу Жибек жолу боюнча экскурсиялар.",
         "desc_en": "Cosy inn at the foot of Sulayman-Too mountain in Osh. Eastern-style breakfast, a chaikhana in the courtyard, Silk Road excursions.",
+        "exterior": ["1652348716053-3447e551dd1f", "1693146842813-be42935ecdbd"],
+        "lobby": "1611048267451-e6ed903d4a38",
     },
 ]
 
+
+# Room photo pools, used round-robin per hotel.
+ROOM_PHOTOS = {
+    "single": ["1551882547-ff40c63fe5fa", "1582719478250-c89cae4dc85b"],
+    "double": ["1611892440504-42a792e24d32", "1631049307264-da0ec9d70304"],
+    "twin":   ["1603072388139-565853396b38", "1603072387986-d6136328c664"],
+    "triple": ["1629140727571-9b5c6f6267b4", "1583847268964-b28dc8f51f92"],
+    "family": ["1578683010236-d716f9a3f461", "1568495248636-6432b97bd949"],
+    "deluxe": ["1618773928121-c32242e63f39", "1496417263034-38ec4f0b665a"],
+    "junior": ["1631049552057-403cdb8f0658", "1711059985570-4c32ed12a12c"],
+    "suite":  ["1576354302919-96748cb8299e", "1621293954908-907159247fc8"],
+    "penthouse": ["1566665797739-1674de7a421a", "1590490360182-c33d57733427"],
+    "bath": ["1507652313519-d4e9174996dd", "1564540583246-934409427776",
+             "1587527901949-ab0341697c1e", "1664917555352-f3f66e57ccc2"],
+}
 
 # Per-hotel room template. Prices vary by hotel "tier".
 def room_template(tier_mult: float) -> list[dict]:
@@ -300,7 +358,10 @@ async def upsert_services(db, hotel: Hotel, key: str) -> None:
 
 
 async def main() -> None:
-    async with AsyncSessionLocal() as db:
+    async with (
+        AsyncSessionLocal() as db,
+        httpx.AsyncClient(headers={"User-Agent": UA}, timeout=30, follow_redirects=True) as client,
+    ):
         # partners
         partners_by_tg = {}
         for p in PARTNERS:
@@ -315,8 +376,21 @@ async def main() -> None:
             rooms = await upsert_rooms(db, hotel, tier)
             await upsert_services(db, hotel, h_spec["key"])
 
+            if not hotel.photos:
+                hotel.photos = await upload_photos(client, h_spec["exterior"] + [h_spec["lobby"]], owner.id)
+            for r_spec, room in zip(room_template(tier), rooms):
+                if room.photos:
+                    continue
+                kind = r_spec["kind"]
+                ids = list(ROOM_PHOTOS[kind])
+                if kind in {"deluxe", "junior", "suite", "penthouse", "family"}:
+                    ids.append(ROOM_PHOTOS["bath"][room.id % len(ROOM_PHOTOS["bath"])])
+                room.photos = await upload_photos(client, ids, owner.id)
+
             mark = "+" if created else "="
-            print(f"  {mark} {hotel.slug:30s} id={hotel.id:3d}  rooms={len(rooms):2d}")
+            n_room_photos = sum(len(r.photos) for r in rooms)
+            print(f"  {mark} {hotel.slug:30s} id={hotel.id:3d}  rooms={len(rooms):2d}  "
+                  f"photos={len(hotel.photos)}+{n_room_photos}")
 
         await db.commit()
         print("done")

@@ -2,6 +2,10 @@
 
 Run inside container:
     docker exec booking_dev_app python scripts/seed_demo.py
+Локально (из корня репо, venv, .env с DATABASE_URL):
+    PYTHONPATH=. .venv/Scripts/python.exe scripts/seed_demo.py
+
+Идемпотентен: отель ищется по name_ru. Без фото (TBB-73): фото живут в media.
 """
 import asyncio
 from datetime import date, timedelta
@@ -19,6 +23,8 @@ from app.models.models import (
     User,
     UserRole,
 )
+from app.utils import gen_unique_hotel_slug
+from seed_common import destination_id_for
 
 
 async def main() -> None:
@@ -45,15 +51,17 @@ async def main() -> None:
                 slug="__pending__",
                 name_ru="Демо-отель",
                 description_ru="Тестовый отель для smoke",
-                city="Bishkek",
+                city="Бишкек",
+                destination_id=await destination_id_for(db, "Бишкек"),
                 address="ул. Чуй 1",
                 lat=42.876,
                 lng=74.604,
-                photos=["https://example.com/demo.jpg"],
+                photos=[],
                 status=HotelStatus.published,
             )
             db.add(hotel)
             await db.flush()
+            hotel.slug = await gen_unique_hotel_slug(db, hotel.name_ru, hotel.id, exclude_id=hotel.id)
 
             db.add_all(
                 [

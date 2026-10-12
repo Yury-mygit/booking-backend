@@ -481,6 +481,8 @@ class Payment(Base):
         ENUM(PaymentProvider, name="payment_provider"), nullable=False
     )
     provider_ref: Mapped[str | None] = mapped_column(String(256), index=True)
+    # Страница оплаты PSP; нужна, чтобы pay/init отдавал её повторно.
+    checkout_url: Mapped[str | None] = mapped_column(Text)
     amount_kgs: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[PaymentStatus] = mapped_column(
         ENUM(PaymentStatus, name="payment_status"), nullable=False

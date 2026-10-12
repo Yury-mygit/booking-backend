@@ -1,9 +1,11 @@
 """Client-side платежи через DevPay (mock PSP) — DP-3/4/5.
 
 Endpoints:
-- `POST /c/bookings/{code}/pay/init` — создаёт Payment(pending) через
-  DevPay intents API, возвращает methods (devpay checkout_url + optional
-  QR partner'а).
+- `POST /c/bookings/{code}/pay/init` — идемпотентно выдаёт страницу оплаты:
+  открытый pending-платёж переиспользуется, иначе создаётся Payment(pending)
+  через DevPay intents API; возвращает methods (devpay checkout_url +
+  optional QR partner'а). 409 `payment_processing` — PSP уже принял оплату,
+  webhook в пути; 502 `psp_unavailable` — PSP не отвечает.
 - `POST /c/payments/webhook/devpay` — принимает webhook от DevPay c
   HMAC-подписью + Idempotency-Key (DP-5). Апдейтит Payment+Booking,
   публикует SSE, кеширует response по Idempotency-Key.
@@ -53,14 +55,17 @@ class PayInitResponse(BaseModel):
     booking_status: BookingStatus
 
 
-async def _get_my_booking(db: AsyncSession, ctx: AuthContext, code: str) -> Booking:
-    booking = (
-        await db.execute(
-            select(Booking)
-            .join(Client, Client.id == Booking.client_id)
-            .where(Booking.code == code, Client.user_id == ctx.user.id)
-        )
-    ).scalar_one_or_none()
+async def _get_my_booking(
+    db: AsyncSession, ctx: AuthContext, code: str, *, for_update: bool = False
+) -> Booking:
+    stmt = (
+        select(Booking)
+        .join(Client, Client.id == Booking.client_id)
+        .where(Booking.code == code, Client.user_id == ctx.user.id)
+    )
+    if for_update:
+        stmt = stmt.with_for_update(of=Booking)
+    booking = (await db.execute(stmt)).scalar_one_or_none()
     if booking is None:
         raise APIError(404, "not_found", "Booking not found")
     return booking
@@ -72,7 +77,9 @@ async def pay_init(
     ctx: AuthContext = Depends(require_role(UserRole.client)),
     db: AsyncSession = Depends(get_db),
 ) -> PayInitResponse:
-    booking = await _get_my_booking(db, ctx, code)
+    # Блокировка брони: параллельные pay/init (двойной тап) не выпишут два
+    # intent'а — второй дождётся первого и получит его checkout.
+    booking = await _get_my_booking(db, ctx, code, for_update=True)
     if booking.status != BookingStatus.pending:
         raise APIError(409, "conflict", f"Booking is {booking.status.value}, not pending")
 
